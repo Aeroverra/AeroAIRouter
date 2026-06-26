@@ -577,25 +577,33 @@ function renderChannels(wrap, f, val) {
   function draw() {
     container.innerHTML = "";
 
-    // configured channels — show friendly names
+    // configured channels — resolve names, then group by server
+    rows.forEach((r) => { const got = resolve(r.id); if (got) { r.name = got.name; r.guild = got.guild; } });
+    const groups = new Map();
     rows.forEach((r, idx) => {
-      const got = resolve(r.id);
-      if (got) { r.name = got.name; r.guild = got.guild; }
-      const label = el("div", { class: "chan-label" }, [
-        el("strong", { text: r.name ? "#" + r.name : r.id }),
-        el("span", { class: "hint", text: (r.guild ? " · " + r.guild : "") + "  (" + r.id + ")" }),
-      ]);
-      const mode = el("select");
-      [["all", "respond to all"], ["addressed", "when addressed (@, reply, wake-word, owner)"], ["mention", "only when @-mentioned"], ["off", "off"]].forEach(([v, t]) => mode.appendChild(el("option", { value: v, text: t })));
-      mode.value = r.mode || "addressed";
-      mode.addEventListener("change", () => { r.mode = mode.value; commit(); });
-      const botsCb = el("input", { type: "checkbox" }); botsCb.checked = !!r.respondToBots; botsCb.style.width = "auto";
-      botsCb.addEventListener("change", () => { r.respondToBots = botsCb.checked; commit(); });
-      const botsL = el("label", { class: "switch" }, [botsCb, " answer bots"]);
-      const rm = el("button", { class: "ghost", text: "✕" });
-      rm.addEventListener("click", () => { rows.splice(idx, 1); draw(); commit(); });
-      container.appendChild(el("div", { class: "chan-row" }, [label, mode, botsL, rm]));
+      const key = r.guild || "Other / not loaded";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ r, idx });
     });
+    for (const [guildName, items] of groups) {
+      container.appendChild(el("div", { class: "chan-group", text: guildName }));
+      for (const { r, idx } of items) {
+        const label = el("div", { class: "chan-label" }, [
+          el("strong", { text: r.name ? "#" + r.name : r.id }),
+          el("span", { class: "hint", text: "  (" + r.id + ")" }),
+        ]);
+        const mode = el("select");
+        [["all", "respond to all"], ["addressed", "when addressed (@, reply, wake-word, owner)"], ["mention", "only when @-mentioned"], ["off", "off"]].forEach(([v, t]) => mode.appendChild(el("option", { value: v, text: t })));
+        mode.value = r.mode || "addressed";
+        mode.addEventListener("change", () => { r.mode = mode.value; commit(); });
+        const botsCb = el("input", { type: "checkbox" }); botsCb.checked = !!r.respondToBots; botsCb.style.width = "auto";
+        botsCb.addEventListener("change", () => { r.respondToBots = botsCb.checked; commit(); });
+        const botsL = el("label", { class: "switch" }, [botsCb, " answer bots"]);
+        const rm = el("button", { class: "ghost", text: "✕" });
+        rm.addEventListener("click", () => { rows.splice(idx, 1); draw(); commit(); });
+        container.appendChild(el("div", { class: "chan-row" }, [label, mode, botsL, rm]));
+      }
+    }
     if (rows.length === 0) container.appendChild(el("p", { class: "hint", text: "No channels configured yet — add one below." }));
 
     // status line
