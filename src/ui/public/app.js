@@ -100,28 +100,82 @@ function renderSetup(mode, status) {
     : "First-run setup. Fields marked * are required.";
   $("[data-setup-submit]", form).textContent = rerun ? "Save" : "Finish setup";
 
-  // password step only on first-run when a password isn't set yet
   const pwBlock = $("[data-when=needsPassword]", form);
   if (rerun || (status && !status.needsPassword)) pwBlock.remove();
+
+  // ----- setup channel picker (server -> channel, by name) -----
+  let setupToken = "";
+  let setupGuilds = null, setupLoading = false, setupErr = null;
+  const setupChannels = (rerun && Array.isArray(getPath(state.config, "discord.channels")))
+    ? getPath(state.config, "discord.channels").map((c) => Object.assign({}, c)) : [];
+  const chanBox = $("[data-setup-channels]", form);
+
+  function resolveName(id) {
+    if (setupGuilds) for (const g of setupGuilds) for (const ch of g.channels) if (ch.id === id) return { name: ch.name, guild: g.guildName };
+    return null;
+  }
+  function loadServers() {
+    const token = form.DISCORD_TOKEN.value.trim() || setupToken;
+    if (!token) { setupErr = "Enter and test your Discord token first."; drawChans(); return; }
+    setupLoading = true; setupErr = null; drawChans();
+    api("POST", "/api/discord/list-channels", { token })
+      .then((r) => { setupGuilds = r.guilds || []; setupLoading = false; drawChans(); })
+      .catch((ex) => { setupLoading = false; setupErr = ex.message; drawChans(); });
+  }
+  function drawChans() {
+    chanBox.innerHTML = "";
+    setupChannels.forEach((r, idx) => {
+      const got = resolveName(r.id); if (got) { r.name = got.name; r.guild = got.guild; }
+      const label = el("div", { class: "chan-label" }, [
+        el("strong", { text: r.name ? "#" + r.name : r.id }),
+        el("span", { class: "hint", text: (r.guild ? " · " + r.guild : "") + "  (" + r.id + ")" }),
+      ]);
+      const mode = el("select");
+      [["all", "respond to all"], ["addressed", "only when addressed"], ["off", "off"]].forEach(([v, t]) => mode.appendChild(el("option", { value: v, text: t })));
+      mode.value = r.mode || "addressed"; mode.addEventListener("change", () => { r.mode = mode.value; });
+      const rm = el("button", { type: "button", class: "ghost", text: "✕" });
+      rm.addEventListener("click", () => { setupChannels.splice(idx, 1); drawChans(); });
+      chanBox.appendChild(el("div", { class: "chan-row" }, [label, mode, rm]));
+    });
+    if (setupLoading) chanBox.appendChild(el("p", { class: "hint", text: "Loading servers…" }));
+    else if (setupErr) chanBox.appendChild(el("p", { class: "err", text: setupErr }));
+    if (setupGuilds && setupGuilds.length) {
+      const gsel = el("select"); gsel.appendChild(el("option", { value: "", text: "— server —" }));
+      setupGuilds.forEach((g, i) => gsel.appendChild(el("option", { value: String(i), text: g.guildName })));
+      const csel = el("select"); csel.disabled = true; csel.appendChild(el("option", { value: "", text: "— channel —" }));
+      gsel.addEventListener("change", () => {
+        csel.innerHTML = ""; csel.appendChild(el("option", { value: "", text: "— channel —" }));
+        const g = setupGuilds[Number(gsel.value)];
+        if (g) { csel.disabled = false; g.channels.filter((ch) => !setupChannels.some((r) => r.id === ch.id)).forEach((ch) => csel.appendChild(el("option", { value: ch.id, text: "#" + ch.name }))); } else csel.disabled = true;
+      });
+      const add = el("button", { type: "button", class: "ghost", text: "+ Add" });
+      add.addEventListener("click", () => {
+        const g = setupGuilds[Number(gsel.value)], id = csel.value;
+        if (g && id && !setupChannels.some((r) => r.id === id)) { const ch = g.channels.find((c) => c.id === id); setupChannels.push({ id, name: ch ? ch.name : "", guild: g.guildName, mode: "addressed", respondToBots: false }); drawChans(); }
+      });
+      chanBox.appendChild(el("div", { class: "picker" }, [gsel, csel, add]));
+    } else if (!setupLoading) {
+      const lb = el("button", { type: "button", class: "ghost", text: setupErr ? "Retry" : "Load servers from Discord" });
+      lb.addEventListener("click", loadServers);
+      chanBox.appendChild(el("div", { class: "list-row" }, [lb]));
+    }
+  }
+  drawChans();
 
   if (rerun) {
     const cancel = $("[data-action=setup-cancel]", form);
     cancel.hidden = false;
     cancel.addEventListener("click", () => openDash());
-    // prefill from current config
     const c = state.config;
     form.botName.value = getPath(c, "discord.wakeWord") || "";
     form.ownerId.value = getPath(c, "discord.ownerId") || "";
-    form.guildId.value = getPath(c, "discord.guilds.home.id") || "";
-    form.botChannel.value = getPath(c, "discord.guilds.home.channels.bot") || "";
-    form.generalChannel.value = getPath(c, "discord.guilds.home.channels.general") || "";
     form.authMode.value = getPath(c, "ai.auth.mode") || "auto";
     form.model.value = getPath(c, "ai.models.complex") || "";
     form.emoji.value = getPath(c, "persona.emoji") || "";
     form.querySelectorAll("[data-secret-note]").forEach((n) => (n.textContent = "(leave blank to keep current)"));
   }
 
-  // Discord token test
+  // Discord token test (also unlocks the channel picker)
   $("[data-action=test-token]", form).addEventListener("click", async () => {
     const out = $("[data-token-check]", form);
     const token = form.DISCORD_TOKEN.value.trim();
@@ -129,7 +183,7 @@ function renderSetup(mode, status) {
     out.textContent = "Checking…"; out.className = "check";
     try {
       const r = await api("POST", "/api/check-discord", { token });
-      if (r.ok) { out.textContent = "✓ Valid — logged in as " + r.username; out.className = "check ok"; }
+      if (r.ok) { out.textContent = "✓ Valid — logged in as " + r.username; out.className = "check ok"; setupToken = token; loadServers(); }
       else { out.textContent = "✗ " + r.error; out.className = "check bad"; }
     } catch (ex) { out.textContent = "✗ " + ex.message; out.className = "check bad"; }
   });
@@ -142,26 +196,18 @@ function renderSetup(mode, status) {
       if (!rerun && pwBlock.parentNode) {
         if (form.password.value !== form.password2.value) throw new Error("Passwords do not match");
       }
-      // map wizard fields onto a config patch
       const patch = {};
       const set = (p, v) => { if (v !== "" && v !== undefined) setPath(patch, p, v); };
       set("discord.wakeWord", form.botName.value.trim());
       set("discord.ownerId", form.ownerId.value.trim());
-      set("discord.guilds.home.id", form.guildId.value.trim());
-      set("discord.guilds.home.channels.bot", form.botChannel.value.trim());
-      set("discord.guilds.home.channels.general", form.generalChannel.value.trim());
       set("ai.auth.mode", form.authMode.value);
       if (form.model.value.trim()) { set("ai.models.complex", form.model.value.trim()); set("ai.models.casual", form.model.value.trim()); }
-      setPath(patch, "persona.emoji", form.emoji.value); // allow clearing
-      // owner in people map
+      setPath(patch, "persona.emoji", form.emoji.value);
       const owner = form.ownerId.value.trim();
-      if (owner) setPath(patch, "discord.people." + owner, { name: form.botName.value.trim() ? "Owner" : "Owner", trust: "owner" });
-      // channels from bot/general
-      const chans = [];
-      if (form.botChannel.value.trim()) chans.push({ id: form.botChannel.value.trim(), mode: "all", respondToBots: false });
-      if (form.generalChannel.value.trim()) chans.push({ id: form.generalChannel.value.trim(), mode: "addressed", respondToBots: false });
-      if (chans.length) setPath(patch, "discord.channels", chans);
-
+      if (owner) setPath(patch, "discord.people." + owner, { name: "Owner", trust: "owner" });
+      if (setupChannels.length) {
+        setPath(patch, "discord.channels", setupChannels.map((r) => ({ id: r.id, name: r.name, guild: r.guild, mode: r.mode || "addressed", respondToBots: !!r.respondToBots })));
+      }
       const secrets = {};
       for (const k of ["DISCORD_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "BRAVE_API_KEY"]) {
         if (form[k] && form[k].value.trim()) secrets[k] = form[k].value.trim();
@@ -269,6 +315,19 @@ function renderContent() {
     if (f.advanced && !state.advanced) continue;
     c.appendChild(renderField(f));
   }
+  if (sec.id === "network") {
+    c.appendChild(el("p", { class: "hint", text: "Save first, then apply. Applying restarts the UI — if you changed the address or port, reconnect at the new URL." }));
+    const btn = el("button", { text: "Apply network changes (restart UI)" });
+    btn.addEventListener("click", restartUi);
+    c.appendChild(btn);
+  }
+}
+
+async function restartUi() {
+  if (state.dirty && !confirm("Unsaved changes won't be applied unless you Save first. Restart the UI anyway?")) return;
+  if (!confirm("Restart the UI now? You may need to reconnect at a new address/port.")) return;
+  try { await api("POST", "/api/ui/restart"); toast("UI restarting… reconnect if the address/port changed."); }
+  catch (ex) { toast(ex.message, true); }
 }
 
 function markDirty() { state.dirty = true; updateSavebar(); }

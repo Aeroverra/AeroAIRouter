@@ -1,13 +1,15 @@
 import { readFileSync, writeFileSync, existsSync, renameSync, chmodSync, mkdirSync } from "fs";
 import { join } from "path";
-import { scryptSync, randomBytes, timingSafeEqual, createHash } from "crypto";
+import { scryptSync, randomBytes, timingSafeEqual } from "crypto";
 import { AIROUTER_HOME } from "../config/paths.js";
 
 const AUTH_FILE = join(AIROUTER_HOME, "ui-auth.json");
+const SECRET_FILE = join(AIROUTER_HOME, "session-secret");
+const MIN_PASSWORD = 8;
 
 function atomicWrite(file, content) {
   if (!existsSync(AIROUTER_HOME)) mkdirSync(AIROUTER_HOME, { recursive: true });
-  const tmp = file + ".tmp-" + process.pid;
+  const tmp = file + ".tmp-" + randomBytes(6).toString("hex");
   writeFileSync(tmp, content, { encoding: "utf8", mode: 0o600 });
   try { chmodSync(tmp, 0o600); } catch {}
   renameSync(tmp, file);
@@ -35,43 +37,45 @@ function verifyHash(password, stored) {
   }
 }
 
-// Create (or reset) the admin password. Generates a session secret on first set.
 export function setPassword(password) {
-  if (!password || String(password).length < 6) {
-    throw new Error("Password must be at least 6 characters");
+  if (!password || String(password).length < MIN_PASSWORD) {
+    throw new Error("Password must be at least " + MIN_PASSWORD + " characters");
   }
-  let sessionSecret;
-  if (existsSync(AUTH_FILE)) {
-    try { sessionSecret = JSON.parse(readFileSync(AUTH_FILE, "utf8")).sessionSecret; } catch {}
-  }
-  if (!sessionSecret) sessionSecret = randomBytes(32).toString("hex");
-  const data = {
-    passwordHash: hashPassword(String(password)),
-    sessionSecret,
-    updatedAt: new Date().toISOString(),
-  };
-  atomicWrite(AUTH_FILE, JSON.stringify(data, null, 2) + "\n");
+  atomicWrite(
+    AUTH_FILE,
+    JSON.stringify({ passwordHash: hashPassword(String(password)), updatedAt: new Date().toISOString() }, null, 2) + "\n"
+  );
   return true;
 }
 
 export function verifyPassword(password) {
   if (!existsSync(AUTH_FILE)) return false;
   try {
-    const data = JSON.parse(readFileSync(AUTH_FILE, "utf8"));
-    return verifyHash(String(password || ""), data.passwordHash);
+    return verifyHash(String(password || ""), JSON.parse(readFileSync(AUTH_FILE, "utf8")).passwordHash);
   } catch {
     return false;
   }
 }
 
-// Session secret for cookie signing; create a transient one if not set yet
-// (only happens before setup, when no protected routes are reachable).
+// A random, persisted session-signing secret — created eagerly at startup,
+// independent of whether a password is set. Never derived from a guessable value
+// (a deterministic secret would let anyone forge an authenticated cookie).
 export function getSessionSecret() {
-  if (existsSync(AUTH_FILE)) {
+  if (existsSync(SECRET_FILE)) {
     try {
-      const s = JSON.parse(readFileSync(AUTH_FILE, "utf8")).sessionSecret;
+      const s = readFileSync(SECRET_FILE, "utf8").trim();
       if (s) return s;
     } catch {}
   }
-  return createHash("sha256").update("aeroairouter-pre-setup-" + AIROUTER_HOME).digest("hex");
+  const secret = randomBytes(32).toString("hex");
+  atomicWrite(SECRET_FILE, secret + "\n");
+  return secret;
+}
+
+// Rotate the signing secret — invalidates all existing sessions on next load.
+// The caller must restart the UI process for the new secret to take effect.
+export function rotateSessionSecret() {
+  const secret = randomBytes(32).toString("hex");
+  atomicWrite(SECRET_FILE, secret + "\n");
+  return secret;
 }

@@ -24,6 +24,7 @@ function uiSettings() {
     port: Number(process.env.AIROUTER_UI_PORT || ui.port || 8787),
     host: process.env.AIROUTER_UI_HOST || ui.host || "0.0.0.0",
     serviceName: ui.serviceName || "aeroairouter.service",
+    selfService: ui.selfService || "aeroairouter-ui.service",
     mdns: ui.mdns !== false,
   };
 }
@@ -46,6 +47,28 @@ function exampleConfig() {
   }
 }
 
+// Fetch the bot's guilds and their text channels (shared by the dashboard and
+// the setup wizard). Throws on failure.
+async function fetchGuildChannels(token) {
+  const headers = { Authorization: "Bot " + token };
+  const gr = await fetch("https://discord.com/api/v10/users/@me/guilds", { headers, signal: AbortSignal.timeout(10000) });
+  if (!gr.ok) throw new Error("Discord guilds fetch failed (HTTP " + gr.status + ")");
+  const guilds = await gr.json();
+  const out = [];
+  for (const g of guilds) {
+    let channels = [];
+    try {
+      const cr = await fetch("https://discord.com/api/v10/guilds/" + g.id + "/channels", { headers, signal: AbortSignal.timeout(10000) });
+      if (cr.ok) {
+        const chans = await cr.json();
+        channels = chans.filter((c) => c.type === 0 || c.type === 5).map((c) => ({ id: c.id, name: c.name }));
+      }
+    } catch {}
+    out.push({ guildId: g.id, guildName: g.name, channels });
+  }
+  return out;
+}
+
 // One-time setup token (only relevant before the admin password is set).
 let setupToken = null;
 function ensureSetupToken() {
@@ -58,7 +81,9 @@ function ensureSetupToken() {
 export function createApp() {
   const app = express();
   app.disable("x-powered-by");
-  app.set("trust proxy", 1);
+  // Directly exposed (no reverse proxy), so DON'T trust X-Forwarded-* — otherwise
+  // a client could spoof it to bypass the login rate-limiter.
+  app.set("trust proxy", false);
 
   app.use(
     helmet({
@@ -123,6 +148,9 @@ export function createApp() {
     }
     next();
   }
+  // systemd unit names passed to execFile come from (admin-only) config; even
+  // though execFile uses no shell, constrain them to valid service-name chars.
+  const validService = (n) => typeof n === "string" && /^[A-Za-z0-9@._-]+\.service$/.test(n);
 
   // ---- public status ----
   app.get("/api/status", (req, res) => {
@@ -194,29 +222,27 @@ export function createApp() {
     }
   });
 
-  // ---- list the bot's guilds + text channels (for the channel picker) ----
+  // ---- list the bot's guilds + text channels (dashboard: uses saved token) ----
   app.get("/api/discord/channels", requireAuth, async (req, res) => {
     const token = process.env.DISCORD_TOKEN || io.readSecretsMap().DISCORD_TOKEN;
     if (!token) return res.status(400).json({ error: "DISCORD_TOKEN not set" });
-    const headers = { Authorization: "Bot " + token };
     try {
-      const gr = await fetch("https://discord.com/api/v10/users/@me/guilds", { headers, signal: AbortSignal.timeout(10000) });
-      if (!gr.ok) return res.status(502).json({ error: "Discord guilds fetch failed (HTTP " + gr.status + ")" });
-      const guilds = await gr.json();
-      const out = [];
-      for (const g of guilds) {
-        let channels = [];
-        try {
-          const cr = await fetch("https://discord.com/api/v10/guilds/" + g.id + "/channels", { headers, signal: AbortSignal.timeout(10000) });
-          if (cr.ok) {
-            const chans = await cr.json();
-            // types 0 (text) and 5 (announcement) are message channels
-            channels = chans.filter((c) => c.type === 0 || c.type === 5).map((c) => ({ id: c.id, name: c.name }));
-          }
-        } catch {}
-        out.push({ guildId: g.id, guildName: g.name, channels });
-      }
-      res.json({ guilds: out });
+      res.json({ guilds: await fetchGuildChannels(token) });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  // ---- list channels for a supplied token (setup wizard, before token is saved)
+  // Gated like check-discord: open during first-run, auth required once set up.
+  app.post("/api/discord/list-channels", loginLimiter, async (req, res) => {
+    if (auth.passwordIsSet() && !(req.session && req.session.authed)) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    const token = (req.body && req.body.token) || "";
+    if (!token) return res.status(400).json({ error: "no token" });
+    try {
+      res.json({ guilds: await fetchGuildChannels(token) });
     } catch (err) {
       res.status(502).json({ error: err.message });
     }
@@ -280,7 +306,11 @@ export function createApp() {
     if (!auth.verifyPassword(current)) return res.status(401).json({ error: "current password incorrect" });
     try {
       auth.setPassword(next);
-      res.json({ ok: true });
+      auth.rotateSessionSecret(); // invalidate all existing sessions
+      res.json({ ok: true, restarting: true });
+      // Restart the UI so the rotated secret takes effect (forces re-login).
+      const svc = uiSettings().selfService;
+      if (validService(svc)) setTimeout(() => execFile("systemctl", ["--user", "restart", svc], { timeout: 20000 }, () => {}), 300);
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -293,15 +323,28 @@ export function createApp() {
 
   // ---- bot control ----
   app.get("/api/bot/status", requireAuth, (req, res) => {
-    execFile("systemctl", ["--user", "is-active", uiSettings().serviceName], { timeout: 8000 }, (err, stdout) => {
+    const svc = uiSettings().serviceName;
+    if (!validService(svc)) return res.json({ status: "unknown" });
+    execFile("systemctl", ["--user", "is-active", svc], { timeout: 8000 }, (err, stdout) => {
       res.json({ status: (stdout || (err && err.message) || "unknown").toString().trim() });
     });
   });
   app.post("/api/bot/restart", requireAuth, requireCsrf, (req, res) => {
-    execFile("systemctl", ["--user", "restart", uiSettings().serviceName], { timeout: 20000 }, (err, stdout, stderr) => {
+    const svc = uiSettings().serviceName;
+    if (!validService(svc)) return res.status(400).json({ error: "invalid serviceName in config" });
+    execFile("systemctl", ["--user", "restart", svc], { timeout: 20000 }, (err, stdout, stderr) => {
       if (err) return res.status(500).json({ error: (stderr || err.message || "restart failed").toString().trim() });
       res.json({ ok: true });
     });
+  });
+
+  // Restart the UI service itself (to apply network/bind changes). The response
+  // is sent first; the restart happens a moment later so the client gets it.
+  app.post("/api/ui/restart", requireAuth, requireCsrf, (req, res) => {
+    const svc = uiSettings().selfService;
+    if (!validService(svc)) return res.status(400).json({ error: "invalid selfService in config" });
+    res.json({ ok: true });
+    setTimeout(() => execFile("systemctl", ["--user", "restart", svc], { timeout: 20000 }, () => {}), 250);
   });
 
   // ---- static SPA ----

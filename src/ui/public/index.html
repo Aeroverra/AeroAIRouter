@@ -37,10 +37,10 @@
             <input name="setupCode" placeholder="e.g. a1b2c3d4" />
           </label>
           <label>Admin password *
-            <input type="password" name="password" autocomplete="new-password" minlength="6" />
+            <input type="password" name="password" autocomplete="new-password" minlength="8" />
           </label>
           <label>Confirm password *
-            <input type="password" name="password2" autocomplete="new-password" minlength="6" />
+            <input type="password" name="password2" autocomplete="new-password" minlength="8" />
           </label>
           <hr />
         </div>
@@ -62,15 +62,11 @@
         <label>Your Discord user ID *
           <input name="ownerId" />
         </label>
-        <label>Primary server (guild) ID
-          <input name="guildId" />
-        </label>
-        <label>Bot channel ID <span class="hint">(bot answers everything here)</span>
-          <input name="botChannel" />
-        </label>
-        <label>General channel ID <span class="hint">(optional; replies only when addressed)</span>
-          <input name="generalChannel" />
-        </label>
+        <div class="field">
+          <label>Channels the bot responds in</label>
+          <span class="hint">Test your token above, then pick servers &amp; channels by name. You can also do this later.</span>
+          <div data-setup-channels></div>
+        </div>
 
         <h3>Claude</h3>
         <label>Auth mode

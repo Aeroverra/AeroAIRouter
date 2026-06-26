@@ -93,6 +93,18 @@ export const SECTIONS = [
     ],
   },
   {
+    id: "network",
+    title: "Network",
+    help: "Where the config UI listens. Changing these requires a UI restart (use the button below).",
+    fields: [
+      { path: "ui.host", label: "Listen address", type: "string", help: "0.0.0.0 = all interfaces (LAN + Tailscale); 127.0.0.1 = localhost only; or a specific IP." },
+      { path: "ui.port", label: "Port", type: "number" },
+      { path: "ui.mdns", label: "Advertise on the network (mDNS / .local)", type: "boolean" },
+      { path: "ui.serviceName", label: "Bot systemd service (for the Restart-bot button)", type: "string", advanced: true },
+      { path: "ui.selfService", label: "UI systemd service (for applying network changes)", type: "string", advanced: true },
+    ],
+  },
+  {
     id: "update",
     title: "Auto-Update",
     help: "Self-update from git.",
