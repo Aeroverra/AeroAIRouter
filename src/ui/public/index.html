@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex" />
+  <title>AeroAIRouter — Control Panel</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="loading" class="center">Loading…</div>
+  </div>
+
+  <!-- Login view -->
+  <template id="tpl-login">
+    <div class="center">
+      <form class="card auth-card" data-form="login">
+        <h1>AeroAIRouter</h1>
+        <p class="muted">Enter your admin password to continue.</p>
+        <input type="password" name="password" placeholder="Password" autocomplete="current-password" required />
+        <button type="submit">Log in</button>
+        <p class="err" data-err></p>
+      </form>
+    </div>
+  </template>
+
+  <!-- Setup wizard (used for first-run AND re-run from the dashboard) -->
+  <template id="tpl-setup">
+    <div class="center">
+      <form class="card auth-card wide" data-form="setup">
+        <h1 data-setup-title>Welcome to AeroAIRouter</h1>
+        <p class="muted" data-setup-sub>First-run setup. Fields marked * are required.</p>
+
+        <div data-when="needsPassword">
+          <label>Setup code <span class="hint">(shown in the server console)</span>
+            <input name="setupCode" placeholder="e.g. a1b2c3d4" />
+          </label>
+          <label>Admin password *
+            <input type="password" name="password" autocomplete="new-password" minlength="6" />
+          </label>
+          <label>Confirm password *
+            <input type="password" name="password2" autocomplete="new-password" minlength="6" />
+          </label>
+          <hr />
+        </div>
+
+        <h3>Bot identity</h3>
+        <label>Bot name <span class="hint">(used as the wake word in busy channels / voice)</span>
+          <input name="botName" placeholder="e.g. Azula" />
+        </label>
+
+        <h3>Discord</h3>
+        <label>Discord bot token *
+          <span class="hint" data-secret-note></span>
+          <div class="row">
+            <input name="DISCORD_TOKEN" />
+            <button type="button" class="ghost" data-action="test-token">Test</button>
+          </div>
+          <span class="check" data-token-check></span>
+        </label>
+        <label>Your Discord user ID *
+          <input name="ownerId" />
+        </label>
+        <label>Primary server (guild) ID
+          <input name="guildId" />
+        </label>
+        <label>Bot channel ID <span class="hint">(bot answers everything here)</span>
+          <input name="botChannel" />
+        </label>
+        <label>General channel ID <span class="hint">(optional; replies only when addressed)</span>
+          <input name="generalChannel" />
+        </label>
+
+        <h3>Claude</h3>
+        <label>Auth mode
+          <select name="authMode">
+            <option value="auto">Auto (API key if set, else OAuth)</option>
+            <option value="apikey">API key</option>
+            <option value="oauth">OAuth setup-token</option>
+          </select>
+        </label>
+        <label>Anthropic API key
+          <span class="hint" data-secret-note></span>
+          <input name="ANTHROPIC_API_KEY" />
+        </label>
+        <label>Claude OAuth setup-token
+          <span class="hint" data-secret-note></span>
+          <input name="CLAUDE_CODE_OAUTH_TOKEN" />
+        </label>
+        <label>Model
+          <input name="model" value="claude-opus-4-8" />
+        </label>
+
+        <h3>Optional</h3>
+        <label>Signature emoji <span class="hint">(appended to messages; blank for none)</span>
+          <input name="emoji" />
+        </label>
+        <label>Brave Search API key <span class="hint">(enables web search)</span>
+          <span class="hint" data-secret-note></span>
+          <input name="BRAVE_API_KEY" />
+        </label>
+
+        <div class="row">
+          <button type="submit" data-setup-submit>Finish setup</button>
+          <button type="button" class="ghost" data-action="setup-cancel" hidden>Cancel</button>
+        </div>
+        <p class="err" data-err></p>
+      </form>
+    </div>
+  </template>
+
+  <!-- Dashboard -->
+  <template id="tpl-dash">
+    <header class="topbar">
+      <div class="brand">AeroAIRouter</div>
+      <div class="topbar-right">
+        <span class="bot-status" data-bot-status>bot: …</span>
+        <button class="ghost" data-action="restart">Restart bot</button>
+        <label class="switch"><input type="checkbox" data-advanced /> Advanced</label>
+        <button class="ghost" data-action="rerun-setup">Setup wizard</button>
+        <button class="ghost" data-action="password">Password</button>
+        <button class="ghost" data-action="logout">Log out</button>
+      </div>
+    </header>
+    <div class="layout">
+      <nav class="sidebar" data-nav></nav>
+      <main class="content" data-content></main>
+    </div>
+    <div class="savebar" data-savebar hidden>
+      <span data-savemsg>Unsaved changes</span>
+      <button data-action="save">Save changes</button>
+    </div>
+  </template>
+</body>
+<script src="/app.js"></script>
+</html>

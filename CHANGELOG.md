@@ -6,7 +6,8 @@
 - JSON config loader with validation and env/secrets.env precedence.
 - Dual authentication: `ANTHROPIC_API_KEY` (default) or Claude subscription
   OAuth setup-token, selectable via `ai.auth.mode`.
-- Plugin system: register tools and bash-command reviewers (see `plugins/example-plugin`). Built-in danger-pattern safety floor.
+- Plugin system: register tools and bash-command reviewers; `proxmox-review`
+  extracted as a bundled plugin. Built-in danger-pattern safety floor.
 - Voice made opt-in with configurable paths.
 - Persona (soul/heartbeat/memory) templated; signature emoji is now config.
 - Semantic guild/channel roles (`home`/`public`, `bot`/`general`).

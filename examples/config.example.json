@@ -5,6 +5,7 @@
     "allowedBots": [],
     "wakeWord": "",
     "presenceGreetings": [],
+    "channels": [],
     "guilds": {
       "home":   { "id": "YOUR_HOME_GUILD_ID",   "channels": { "bot": "BOT_CHANNEL_ID", "general": "GENERAL_CHANNEL_ID" } },
       "public": { "id": "YOUR_PUBLIC_GUILD_ID", "channels": { "bot": "BOT_CHANNEL_ID", "general": "GENERAL_CHANNEL_ID" } }

@@ -49,6 +49,34 @@ replace `__INSTALL_DIR__`, `__NODE__`, and `__AIROUTER_HOME__`, drop it in
 `~/.config/systemd/user/aeroairouter.service`, then
 `systemctl --user enable --now aeroairouter.service`.
 
+## Config UI
+
+A web control panel manages everything in `config.json`, the secrets, and the
+persona files — no hand-editing required.
+
+```bash
+npm run ui        # or install scripts/aeroairouter-ui.service.template as a service
+```
+
+- Binds `0.0.0.0`, so it's reachable on every LAN IP **and** your Tailscale IP;
+  on startup it prints all the URLs (and advertises over mDNS if `bonjour-service`
+  is installed).
+- **Password-protected.** On first run it prints a one-time **setup code** to the
+  console; the web wizard uses it to set your admin password and walk through the
+  essentials (bot name, Discord token *with a live validity check*, owner ID,
+  channels, Claude auth, model, emoji). You can re-run the wizard any time from
+  the dashboard (it pre-fills current values).
+- **Simple vs Advanced** mode, a per-section editor, a Discord **channel picker**
+  (choose channels and set per-channel response rules), persona editors, and a
+  raw-JSON editor so anything is configurable.
+- Secret values are never sent to the browser (shown only as set/not-set) and are
+  written to `secrets.env`, never to `config.json`.
+- A **Restart bot** button applies changes (set `ui.serviceName` to your bot's
+  systemd unit). Security: scrypt-hashed password, signed `sameSite=strict`
+  session cookie, CSRF + same-origin checks, helmet headers, login rate-limiting.
+
+UI settings live under `ui` in config.json: `{ port, host, serviceName, mdns }`.
+
 ## Authentication
 
 Set the mode in `config.json` under `ai.auth.mode`:
@@ -68,7 +96,8 @@ Set the mode in `config.json` under `ai.auth.mode`:
 | `discord.ownerId` | Your Discord user id (full owner trust). |
 | `discord.elevatedUsers` | User ids with elevated tool access (no shell/file tools — owner only). |
 | `discord.allowedBots` | Bot user ids the router is allowed to respond to (default: none). |
-| `discord.wakeWord` | Word that triggers a reply in general channels / voice (e.g. the bot's name). |
+| `discord.wakeWord` | Word that triggers a reply in addressed channels / voice (e.g. the bot's name). |
+| `discord.channels` | Per-channel rules: `[{ id, mode: "all"\|"addressed"\|"off", respondToBots }]`. Falls back to the guild channels if empty. |
 | `discord.guilds.home` / `.public` | Two guild "roles" with `channels.bot` and `channels.general`. A single-server setup can point both at the same guild. |
 | `discord.people` | Map of user id → `{ name, trust }` (`owner`/`elevated`/`light`). |
 | `discord.activity` | Presence: `{ text, type, url }`. |
