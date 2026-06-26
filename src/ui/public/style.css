@@ -33,6 +33,21 @@ a { color: var(--accent); }
   border-radius: var(--radius); padding: 28px; box-shadow: 0 8px 30px rgba(0,0,0,.35);
 }
 .auth-card { width: 100%; max-width: 420px; }
+.wizard { width: 100%; max-width: 600px; display: flex; flex-direction: column; max-height: 92vh; }
+.wiz-head { margin-bottom: 14px; }
+.wiz-head h1 { margin: 0 0 10px; font-size: 22px; }
+.dots { display: flex; gap: 6px; margin-bottom: 6px; }
+.dot { width: 22px; height: 5px; border-radius: 999px; background: var(--border); }
+.dot.active { background: var(--accent); }
+.dot.done { background: var(--accent2); }
+.step-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.wiz-body { overflow: auto; padding: 4px 2px; flex: 1; }
+.wiz-intro { color: var(--text); margin: 0 0 14px; }
+.wiz-list { color: var(--muted); font-size: 13px; margin: 0 0 16px; padding-left: 20px; }
+.wiz-list li { margin: 4px 0; }
+.wiz-nav { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.wiz-nav .spacer { flex: 1; }
+.field .hint a { white-space: nowrap; }
 .auth-card.wide { max-width: 560px; max-height: 90vh; overflow: auto; }
 .auth-card h1 { margin: 0 0 4px; font-size: 22px; }
 .auth-card h3 { margin: 18px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }

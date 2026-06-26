@@ -62,6 +62,10 @@ const defaults = {
   features: { voice: false },
   voice: { channelId: "", whisperPath: "", edgeTtsPath: "", ttsCacheDir: "/tmp/aeroairouter-tts" },
   update: { enabled: false, branch: "main", intervalHours: 24, channelId: "" },
+  integrations: {
+    github: { defaultVisibility: "private", tokens: [] }, // tokens: [{ label, key }] — values in secrets.env
+    cloudflare: { enabled: false, accountId: "" },
+  },
 };
 
 function mergeDeep(base, override) {
@@ -157,6 +161,7 @@ const config = {
   features: merged.features,
   voice: merged.voice,
   update: merged.update,
+  integrations: merged.integrations,
 };
 
 export default config;

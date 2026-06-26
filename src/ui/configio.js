@@ -10,13 +10,22 @@ import {
   DATA_DIR,
 } from "../config/paths.js";
 
-// Secret keys the UI manages (values live only in secrets.env / env, never in config.json).
+// Fixed secret keys the UI always shows (values live only in secrets.env / env,
+// never in config.json).
 export const SECRET_KEYS = [
   "DISCORD_TOKEN",
   "ANTHROPIC_API_KEY",
   "CLAUDE_CODE_OAUTH_TOKEN",
   "BRAVE_API_KEY",
+  "CLOUDFLARE_TOKEN",
 ];
+
+// GitHub tokens are dynamic: GITHUB_TOKEN or GITHUB_TOKEN_<SLUG> (multiple).
+const GITHUB_KEY_RE = /^GITHUB_TOKEN(_[A-Z0-9_]+)?$/;
+
+function isAllowedSecretKey(k) {
+  return SECRET_KEYS.includes(k) || GITHUB_KEY_RE.test(k);
+}
 
 export const PERSONA_FILES = ["soul.md", "heartbeat.md", "memory.md"];
 
@@ -76,15 +85,18 @@ export function secretPresence() {
   const map = readSecretsMap();
   const out = {};
   for (const k of SECRET_KEYS) out[k] = !!(process.env[k] || map[k]);
+  for (const k of Object.keys(map)) if (GITHUB_KEY_RE.test(k)) out[k] = !!map[k];
+  for (const k of Object.keys(process.env)) if (GITHUB_KEY_RE.test(k)) out[k] = true;
   return out;
 }
 
 // Update secrets.env. `updates` is a partial map; only provided keys are changed.
-// An empty-string value clears that key. Other keys are preserved.
+// A null value DELETES the key; an empty string clears it. Others are preserved.
 export function updateSecrets(updates) {
   const map = readSecretsMap();
   for (const [k, v] of Object.entries(updates || {})) {
-    if (!SECRET_KEYS.includes(k)) continue;
+    if (!isAllowedSecretKey(k)) continue;
+    if (v === null) { delete map[k]; continue; }
     if (typeof v !== "string") continue;
     map[k] = v;
   }

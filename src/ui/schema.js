@@ -93,6 +93,18 @@ export const SECTIONS = [
     ],
   },
   {
+    id: "integrations",
+    title: "Integrations",
+    help: "Optional service credentials the bot can use. Stored in secrets.env, never in config.json.",
+    fields: [
+      { path: "integrations.github.defaultVisibility", label: "New GitHub repos default to", type: "select", options: ["private", "public"] },
+      { path: "integrations.github.tokens", label: "GitHub tokens", type: "githubtokens", help: "Add one or more (e.g. personal, work). Generate at github.com/settings/tokens." },
+      { path: "integrations.cloudflare.enabled", label: "Enable Cloudflare", type: "boolean" },
+      { secret: "CLOUDFLARE_TOKEN", label: "Cloudflare API token", type: "secret", help: "Create at dash.cloudflare.com → My Profile → API Tokens." },
+      { path: "integrations.cloudflare.accountId", label: "Cloudflare account ID", type: "string", advanced: true },
+    ],
+  },
+  {
     id: "network",
     title: "Network",
     help: "Where the config UI listens. Changing these requires a UI restart (use the button below).",

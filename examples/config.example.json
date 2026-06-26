@@ -28,5 +28,9 @@
   "plugins": { "enabled": [], "config": {} },
   "review": { "policy": "allow", "dangerPatterns": [], "allowReviewerOverride": false },
   "update": { "enabled": false, "branch": "main", "intervalHours": 24, "channelId": "" },
+  "integrations": {
+    "github": { "defaultVisibility": "private", "tokens": [] },
+    "cloudflare": { "enabled": false, "accountId": "" }
+  },
   "ui": { "hosts": ["0.0.0.0"], "port": 8787, "mdns": true, "serviceName": "aeroairouter.service", "selfService": "aeroairouter-ui.service" }
 }

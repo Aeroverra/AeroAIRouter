@@ -88,57 +88,86 @@ function renderLogin() {
   mount(frag);
 }
 
-// ---------- setup wizard (first-run + re-run) ----------
+// ---------- setup wizard (multi-step; first-run + re-run) ----------
 function renderSetup(mode, status) {
   const frag = tpl("tpl-setup");
-  const form = $("[data-form=setup]", frag);
   const rerun = mode === "rerun";
+  const titleEl = $("[data-setup-title]", frag);
+  const progressEl = $("[data-progress]", frag);
+  const bodyEl = $("[data-body]", frag);
+  const errEl = $("[data-err]", frag);
+  const backBtn = $("[data-back]", frag);
+  const nextBtn = $("[data-next]", frag);
+  const finishBtn = $("[data-finish]", frag);
+  const cancelBtn = $("[data-cancel]", frag);
+  const c = state.config || {};
 
-  $("[data-setup-title]", form).textContent = rerun ? "Re-run setup" : "Welcome to AeroAIRouter";
-  $("[data-setup-sub]", form).textContent = rerun
-    ? "Adjust the essentials below. Secret fields are blank — leave blank to keep the current value."
-    : "First-run setup. Fields marked * are required.";
-  $("[data-setup-submit]", form).textContent = rerun ? "Save" : "Finish setup";
+  const data = {
+    setupCode: "", password: "", password2: "",
+    botName: rerun ? getPath(c, "discord.wakeWord") || "" : "",
+    DISCORD_TOKEN: "",
+    ownerId: rerun ? getPath(c, "discord.ownerId") || "" : "",
+    authMode: rerun ? getPath(c, "ai.auth.mode") || "auto" : "auto",
+    ANTHROPIC_API_KEY: "", CLAUDE_CODE_OAUTH_TOKEN: "", BRAVE_API_KEY: "",
+    model: rerun ? getPath(c, "ai.models.complex") || "claude-opus-4-8" : "claude-opus-4-8",
+    emoji: rerun ? getPath(c, "persona.emoji") || "" : "",
+    visibility: rerun ? getPath(c, "integrations.github.defaultVisibility") || "private" : "private",
+    GITHUB_TOKEN: "", CLOUDFLARE_TOKEN: "",
+  };
 
-  const pwBlock = $("[data-when=needsPassword]", form);
-  if (rerun || (status && !status.needsPassword)) pwBlock.remove();
-
-  // ----- setup channel picker (server -> channel, by name) -----
+  // shared channel-picker state
   let setupToken = "";
   let setupGuilds = null, setupLoading = false, setupErr = null;
-  const setupChannels = (rerun && Array.isArray(getPath(state.config, "discord.channels")))
-    ? getPath(state.config, "discord.channels").map((c) => Object.assign({}, c)) : [];
-  const chanBox = $("[data-setup-channels]", form);
+  const setupChannels = (rerun && Array.isArray(getPath(c, "discord.channels")))
+    ? getPath(c, "discord.channels").map((x) => Object.assign({}, x)) : [];
 
-  function resolveName(id) {
-    if (setupGuilds) for (const g of setupGuilds) for (const ch of g.channels) if (ch.id === id) return { name: ch.name, guild: g.guildName };
-    return null;
+  // ---- small builders ----
+  const link = (t, href) => el("a", { href, target: "_blank", rel: "noopener", text: t });
+  const code = (t) => el("code", { text: t });
+  function field(labelText, inputEl, helpNodes) {
+    const w = el("div", { class: "field" });
+    w.appendChild(el("label", { text: labelText }));
+    if (helpNodes) w.appendChild(el("div", { class: "hint" }, [].concat(helpNodes)));
+    w.appendChild(inputEl);
+    return w;
   }
-  function loadServers() {
-    const token = form.DISCORD_TOKEN.value.trim() || setupToken;
-    if (!token) { setupErr = "Enter and test your Discord token first."; drawChans(); return; }
-    setupLoading = true; setupErr = null; drawChans();
+  function txt(key, ph) { const i = el("input", { type: "text", value: data[key] || "", placeholder: ph || "" }); i.addEventListener("input", () => (data[key] = i.value)); return i; }
+  function secret(key, ph) {
+    const isSet = rerun && state.secrets && state.secrets[key];
+    const i = el("input", { type: "password", value: data[key] || "", placeholder: isSet ? "•••••• (leave blank to keep)" : (ph || "") });
+    i.addEventListener("input", () => (data[key] = i.value));
+    return i;
+  }
+
+  // ---- channel picker (grouped by server) ----
+  function resolveName(id) { if (setupGuilds) for (const g of setupGuilds) for (const ch of g.channels) if (ch.id === id) return { name: ch.name, guild: g.guildName }; return null; }
+  function loadServers(box) {
+    const token = setupToken || data.DISCORD_TOKEN.trim();
+    if (!token) { setupErr = "Test your Discord token in the previous step first."; drawChans(box); return; }
+    setupLoading = true; setupErr = null; drawChans(box);
     api("POST", "/api/discord/list-channels", { token })
-      .then((r) => { setupGuilds = r.guilds || []; setupLoading = false; drawChans(); })
-      .catch((ex) => { setupLoading = false; setupErr = ex.message; drawChans(); });
+      .then((r) => { setupGuilds = r.guilds || []; setupLoading = false; drawChans(box); })
+      .catch((ex) => { setupLoading = false; setupErr = ex.message; drawChans(box); });
   }
-  function drawChans() {
-    chanBox.innerHTML = "";
-    setupChannels.forEach((r, idx) => {
-      const got = resolveName(r.id); if (got) { r.name = got.name; r.guild = got.guild; }
-      const label = el("div", { class: "chan-label" }, [
-        el("strong", { text: r.name ? "#" + r.name : r.id }),
-        el("span", { class: "hint", text: (r.guild ? " · " + r.guild : "") + "  (" + r.id + ")" }),
-      ]);
-      const mode = el("select");
-      [["all", "respond to all"], ["addressed", "when addressed (@, reply, wake-word, owner)"], ["mention", "only when @-mentioned"], ["off", "off"]].forEach(([v, t]) => mode.appendChild(el("option", { value: v, text: t })));
-      mode.value = r.mode || "addressed"; mode.addEventListener("change", () => { r.mode = mode.value; });
-      const rm = el("button", { type: "button", class: "ghost", text: "✕" });
-      rm.addEventListener("click", () => { setupChannels.splice(idx, 1); drawChans(); });
-      chanBox.appendChild(el("div", { class: "chan-row" }, [label, mode, rm]));
-    });
-    if (setupLoading) chanBox.appendChild(el("p", { class: "hint", text: "Loading servers…" }));
-    else if (setupErr) chanBox.appendChild(el("p", { class: "err", text: setupErr }));
+  function drawChans(box) {
+    box.innerHTML = "";
+    setupChannels.forEach((r) => { const got = resolveName(r.id); if (got) { r.name = got.name; r.guild = got.guild; } });
+    const groups = new Map();
+    setupChannels.forEach((r, idx) => { const k = r.guild || "Other / not loaded"; if (!groups.has(k)) groups.set(k, []); groups.get(k).push({ r, idx }); });
+    for (const [gname, items] of groups) {
+      box.appendChild(el("div", { class: "chan-group", text: gname }));
+      for (const { r, idx } of items) {
+        const label = el("div", { class: "chan-label" }, [el("strong", { text: r.name ? "#" + r.name : r.id }), el("span", { class: "hint", text: "  (" + r.id + ")" })]);
+        const mode = el("select");
+        [["all", "respond to all"], ["addressed", "when addressed (@, reply, wake-word, owner)"], ["mention", "only when @-mentioned"], ["off", "off"]].forEach(([v, t]) => mode.appendChild(el("option", { value: v, text: t })));
+        mode.value = r.mode || "addressed"; mode.addEventListener("change", () => (r.mode = mode.value));
+        const rm = el("button", { type: "button", class: "ghost", text: "✕" });
+        rm.addEventListener("click", () => { setupChannels.splice(idx, 1); drawChans(box); });
+        box.appendChild(el("div", { class: "chan-row" }, [label, mode, rm]));
+      }
+    }
+    if (setupLoading) box.appendChild(el("p", { class: "hint", text: "Loading servers…" }));
+    else if (setupErr) box.appendChild(el("p", { class: "err", text: setupErr }));
     if (setupGuilds && setupGuilds.length) {
       const gsel = el("select"); gsel.appendChild(el("option", { value: "", text: "— server —" }));
       setupGuilds.forEach((g, i) => gsel.appendChild(el("option", { value: String(i), text: g.guildName })));
@@ -149,93 +178,171 @@ function renderSetup(mode, status) {
         if (g) { csel.disabled = false; g.channels.filter((ch) => !setupChannels.some((r) => r.id === ch.id)).forEach((ch) => csel.appendChild(el("option", { value: ch.id, text: "#" + ch.name }))); } else csel.disabled = true;
       });
       const add = el("button", { type: "button", class: "ghost", text: "+ Add" });
-      add.addEventListener("click", () => {
-        const g = setupGuilds[Number(gsel.value)], id = csel.value;
-        if (g && id && !setupChannels.some((r) => r.id === id)) { const ch = g.channels.find((c) => c.id === id); setupChannels.push({ id, name: ch ? ch.name : "", guild: g.guildName, mode: "addressed", respondToBots: false }); drawChans(); }
-      });
-      chanBox.appendChild(el("div", { class: "picker" }, [gsel, csel, add]));
+      add.addEventListener("click", () => { const g = setupGuilds[Number(gsel.value)], id = csel.value; if (g && id && !setupChannels.some((r) => r.id === id)) { const ch = g.channels.find((x) => x.id === id); setupChannels.push({ id, name: ch ? ch.name : "", guild: g.guildName, mode: "addressed", respondToBots: false }); drawChans(box); } });
+      box.appendChild(el("div", { class: "picker" }, [gsel, csel, add]));
     } else if (!setupLoading) {
       const lb = el("button", { type: "button", class: "ghost", text: setupErr ? "Retry" : "Load servers from Discord" });
-      lb.addEventListener("click", loadServers);
-      chanBox.appendChild(el("div", { class: "list-row" }, [lb]));
+      lb.addEventListener("click", () => loadServers(box));
+      box.appendChild(el("div", { class: "list-row" }, [lb]));
     }
   }
-  drawChans();
 
-  if (rerun) {
-    const cancel = $("[data-action=setup-cancel]", form);
-    cancel.hidden = false;
-    cancel.addEventListener("click", () => openDash());
-    const c = state.config;
-    form.botName.value = getPath(c, "discord.wakeWord") || "";
-    form.ownerId.value = getPath(c, "discord.ownerId") || "";
-    form.authMode.value = getPath(c, "ai.auth.mode") || "auto";
-    form.model.value = getPath(c, "ai.models.complex") || "";
-    form.emoji.value = getPath(c, "persona.emoji") || "";
-    form.querySelectorAll("[data-secret-note]").forEach((n) => (n.textContent = "(leave blank to keep current)"));
+  // ---- steps ----
+  const steps = [];
+  if (!rerun && status && status.needsPassword) {
+    steps.push({
+      title: "Admin password",
+      render(b) {
+        b.appendChild(el("p", { class: "wiz-intro", text: "This password protects the control panel — you'll log in with it from now on." }));
+        b.appendChild(field("Setup code", txt("setupCode", "paste the code from the server console"), "Printed in the server console / journal when the UI started."));
+        const p1 = el("input", { type: "password", value: data.password, placeholder: "at least 8 characters" }); p1.addEventListener("input", () => (data.password = p1.value));
+        const p2 = el("input", { type: "password", value: data.password2 }); p2.addEventListener("input", () => (data.password2 = p2.value));
+        b.appendChild(field("Admin password", p1));
+        b.appendChild(field("Confirm password", p2));
+      },
+      validate() { if (!data.password || data.password.length < 8) return "Password must be at least 8 characters."; if (data.password !== data.password2) return "Passwords do not match."; return null; },
+    });
   }
-
-  // Discord token test (also unlocks the channel picker)
-  $("[data-action=test-token]", form).addEventListener("click", async () => {
-    const out = $("[data-token-check]", form);
-    const token = form.DISCORD_TOKEN.value.trim();
-    if (!token) { out.textContent = "Enter a token first"; out.className = "check bad"; return; }
-    out.textContent = "Checking…"; out.className = "check";
-    try {
-      const r = await api("POST", "/api/check-discord", { token });
-      if (r.ok) { out.textContent = "✓ Valid — logged in as " + r.username; out.className = "check ok"; setupToken = token; loadServers(); }
-      else { out.textContent = "✗ " + r.error; out.className = "check bad"; }
-    } catch (ex) { out.textContent = "✗ " + ex.message; out.className = "check bad"; }
+  steps.push({
+    title: "Discord bot",
+    render(b) {
+      b.appendChild(el("p", { class: "wiz-intro" }, ["Create a bot and paste its token. ", link("Open the Discord Developer Portal ↗", "https://discord.com/developers/applications")]));
+      b.appendChild(el("ol", { class: "wiz-list" }, [
+        el("li", { text: "New Application → Bot → Reset Token → Copy." }),
+        el("li", { text: "Bot → Privileged Gateway Intents → enable MESSAGE CONTENT INTENT." }),
+        el("li", { text: "OAuth2 → URL Generator → scope “bot”, then invite it to your server." }),
+      ]));
+      const tokenInput = secret("DISCORD_TOKEN", "paste bot token");
+      const testBtn = el("button", { type: "button", class: "ghost", text: "Test" });
+      const checkOut = el("span", { class: "check" });
+      testBtn.addEventListener("click", async () => {
+        const t = data.DISCORD_TOKEN.trim();
+        if (!t) { checkOut.textContent = "Enter a token first"; checkOut.className = "check bad"; return; }
+        checkOut.textContent = "Checking…"; checkOut.className = "check";
+        try { const r = await api("POST", "/api/check-discord", { token: t }); if (r.ok) { checkOut.textContent = "✓ Valid — " + r.username; checkOut.className = "check ok"; setupToken = t; setupGuilds = null; } else { checkOut.textContent = "✗ " + r.error; checkOut.className = "check bad"; } }
+        catch (ex) { checkOut.textContent = "✗ " + ex.message; checkOut.className = "check bad"; }
+      });
+      b.appendChild(field("Discord bot token", el("div", { class: "row" }, [tokenInput, testBtn]), "Click Test to verify it works."));
+      b.appendChild(checkOut);
+      b.appendChild(field("Bot name", txt("botName", "e.g. Azula"), "Used as the wake word in busy channels and voice."));
+      b.appendChild(field("Your Discord user ID", txt("ownerId", "your user ID"), "Discord → Settings → Advanced → Developer Mode ON, then right-click your name → Copy User ID."));
+    },
+    validate() { if (!rerun && !data.DISCORD_TOKEN.trim()) return "Discord bot token is required."; if (!data.ownerId.trim()) return "Your Discord user ID is required."; return null; },
+  });
+  steps.push({
+    title: "Channels",
+    render(b) {
+      b.appendChild(el("p", { class: "wiz-intro", text: "Pick which channels the bot watches and how it responds. You can change this anytime." }));
+      const box = el("div"); b.appendChild(box);
+      drawChans(box);
+      if (!setupGuilds && !setupLoading && (setupToken || data.DISCORD_TOKEN.trim())) loadServers(box);
+    },
+  });
+  steps.push({
+    title: "Claude",
+    render(b) {
+      b.appendChild(el("p", { class: "wiz-intro", text: "How the bot talks to Claude — a standard API key, or your Claude subscription via an OAuth token." }));
+      const sel = el("select"); [["auto", "Auto (API key if set, else OAuth)"], ["apikey", "API key"], ["oauth", "OAuth setup-token"]].forEach(([v, t]) => sel.appendChild(el("option", { value: v, text: t }))); sel.value = data.authMode; sel.addEventListener("change", () => (data.authMode = sel.value));
+      b.appendChild(field("Auth mode", sel));
+      b.appendChild(field("Anthropic API key", secret("ANTHROPIC_API_KEY", "sk-ant-…"), ["Create one at ", link("console.anthropic.com ↗", "https://console.anthropic.com/settings/keys"), "."]));
+      b.appendChild(field("Claude OAuth setup-token", secret("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-…"), ["Run ", code("claude setup-token"), " in a terminal — uses your Claude subscription."]));
+      b.appendChild(field("Model", txt("model", "claude-opus-4-8")));
+    },
+    validate() {
+      if (rerun) return null;
+      if (!data.ANTHROPIC_API_KEY.trim() && !data.CLAUDE_CODE_OAUTH_TOKEN.trim()) return "Provide an Anthropic API key OR an OAuth setup-token.";
+      if (data.authMode === "oauth" && !data.CLAUDE_CODE_OAUTH_TOKEN.trim()) return "OAuth mode needs the setup-token.";
+      if (data.authMode === "apikey" && !data.ANTHROPIC_API_KEY.trim()) return "API-key mode needs the API key.";
+      return null;
+    },
+  });
+  steps.push({
+    title: "Integrations (optional)",
+    render(b) {
+      b.appendChild(el("p", { class: "wiz-intro", text: "Optional credentials the bot can use. Skip any you don't need — add more later." }));
+      b.appendChild(field("Brave Search API key", secret("BRAVE_API_KEY", "enables web search"), ["Free key at ", link("brave.com/search/api ↗", "https://brave.com/search/api/"), "."]));
+      b.appendChild(field("GitHub token", secret("GITHUB_TOKEN", "ghp_… / github_pat_…"), ["Create at ", link("github.com/settings/tokens ↗", "https://github.com/settings/tokens"), ". Add more later in Integrations."]));
+      const vis = el("select"); [["private", "Private"], ["public", "Public"]].forEach(([v, t]) => vis.appendChild(el("option", { value: v, text: t }))); vis.value = data.visibility; vis.addEventListener("change", () => (data.visibility = vis.value));
+      b.appendChild(field("New GitHub repos default to", vis));
+      b.appendChild(field("Cloudflare API token", secret("CLOUDFLARE_TOKEN", "optional"), ["Create at ", link("Cloudflare → API Tokens ↗", "https://dash.cloudflare.com/profile/api-tokens"), "."]));
+    },
+  });
+  steps.push({
+    title: "Finish",
+    render(b) {
+      b.appendChild(el("p", { class: "wiz-intro", text: "Last touches, then save." }));
+      b.appendChild(field("Signature emoji", txt("emoji", "e.g. a custom emoji, or blank"), "Appended to messages. Leave blank for none."));
+      b.appendChild(el("p", { class: "hint", text: "Click Finish to save. Restart the bot (dashboard button) to apply changes." }));
+    },
   });
 
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const err = $("[data-err]", form);
-    err.textContent = "";
+  // ---- step engine ----
+  let idx = 0;
+  function renderStep() {
+    errEl.textContent = "";
+    const step = steps[idx];
+    titleEl.textContent = rerun ? "Re-run setup" : "Set up AeroAIRouter";
+    progressEl.innerHTML = "";
+    const dots = el("div", { class: "dots" });
+    steps.forEach((s, i) => dots.appendChild(el("span", { class: "dot" + (i === idx ? " active" : "") + (i < idx ? " done" : "") })));
+    progressEl.appendChild(dots);
+    progressEl.appendChild(el("div", { class: "step-label", text: "Step " + (idx + 1) + " of " + steps.length + " — " + step.title }));
+    bodyEl.innerHTML = "";
+    step.render(bodyEl);
+    backBtn.hidden = idx === 0;
+    nextBtn.hidden = idx === steps.length - 1;
+    finishBtn.hidden = idx !== steps.length - 1;
+    cancelBtn.hidden = !rerun;
+  }
+  function go(delta) {
+    if (delta > 0) { const v = steps[idx].validate && steps[idx].validate(); if (v) { errEl.textContent = v; return; } }
+    idx = Math.max(0, Math.min(steps.length - 1, idx + delta));
+    renderStep();
+  }
+  backBtn.addEventListener("click", () => go(-1));
+  nextBtn.addEventListener("click", () => go(1));
+  cancelBtn.addEventListener("click", () => openDash());
+  finishBtn.addEventListener("click", submit);
+
+  async function submit() {
+    errEl.textContent = "";
     try {
-      if (!rerun && pwBlock.parentNode) {
-        if (form.password.value !== form.password2.value) throw new Error("Passwords do not match");
-      }
+      for (const s of steps) { const v = s.validate && s.validate(); if (v) { errEl.textContent = v; return; } }
       const patch = {};
       const set = (p, v) => { if (v !== "" && v !== undefined) setPath(patch, p, v); };
-      set("discord.wakeWord", form.botName.value.trim());
-      set("discord.ownerId", form.ownerId.value.trim());
-      set("ai.auth.mode", form.authMode.value);
-      if (form.model.value.trim()) { set("ai.models.complex", form.model.value.trim()); set("ai.models.casual", form.model.value.trim()); }
-      setPath(patch, "persona.emoji", form.emoji.value);
-      const owner = form.ownerId.value.trim();
+      set("discord.wakeWord", data.botName.trim());
+      set("discord.ownerId", data.ownerId.trim());
+      set("ai.auth.mode", data.authMode);
+      if (data.model.trim()) { set("ai.models.complex", data.model.trim()); set("ai.models.casual", data.model.trim()); }
+      setPath(patch, "persona.emoji", data.emoji);
+      const owner = data.ownerId.trim();
       if (owner) setPath(patch, "discord.people." + owner, { name: "Owner", trust: "owner" });
-      if (setupChannels.length) {
-        setPath(patch, "discord.channels", setupChannels.map((r) => ({ id: r.id, name: r.name, guild: r.guild, mode: r.mode || "addressed", respondToBots: !!r.respondToBots })));
+      if (setupChannels.length) setPath(patch, "discord.channels", setupChannels.map((r) => ({ id: r.id, name: r.name, guild: r.guild, mode: r.mode || "addressed", respondToBots: !!r.respondToBots })));
+      setPath(patch, "integrations.github.defaultVisibility", data.visibility);
+      if (data.GITHUB_TOKEN.trim()) {
+        const tokens = (getPath(state.config, "integrations.github.tokens") || []).slice();
+        if (!tokens.some((t) => t.key === "GITHUB_TOKEN")) tokens.push({ label: "default", key: "GITHUB_TOKEN" });
+        setPath(patch, "integrations.github.tokens", tokens);
       }
+      if (data.CLOUDFLARE_TOKEN.trim()) setPath(patch, "integrations.cloudflare.enabled", true);
+
       const secrets = {};
-      for (const k of ["DISCORD_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "BRAVE_API_KEY"]) {
-        if (form[k] && form[k].value.trim()) secrets[k] = form[k].value.trim();
-      }
+      for (const k of ["DISCORD_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "BRAVE_API_KEY", "GITHUB_TOKEN", "CLOUDFLARE_TOKEN"]) if (data[k] && data[k].trim()) secrets[k] = data[k].trim();
 
       if (rerun) {
         const merged = deepMerge(structuredClone(state.config), patch);
         await api("PUT", "/api/config", { config: merged });
         if (Object.keys(secrets).length) await api("PUT", "/api/secrets", { secrets });
-        toast("Setup saved");
-        await openDash();
+        toast("Setup saved"); await openDash();
       } else {
-        if (!form.DISCORD_TOKEN.value.trim()) throw new Error("Discord token is required");
-        if (!owner) throw new Error("Owner user ID is required");
-        const res = await api("POST", "/api/setup", {
-          setupCode: form.setupCode ? form.setupCode.value.trim() : undefined,
-          password: form.password ? form.password.value : undefined,
-          config: patch,
-          secrets,
-        });
-        state.csrf = res.csrf;
-        toast("Setup complete");
-        await openDash();
+        const res = await api("POST", "/api/setup", { setupCode: data.setupCode.trim() || undefined, password: status && status.needsPassword ? data.password : undefined, config: patch, secrets });
+        state.csrf = res.csrf; toast("Setup complete"); await openDash();
       }
-    } catch (ex) { err.textContent = ex.message; }
-  });
+    } catch (ex) { errEl.textContent = ex.message; }
+  }
 
   mount(frag);
+  renderStep();
 }
 
 function deepMerge(base, over) {
@@ -370,6 +477,7 @@ function renderField(f) {
       break;
     }
     case "binds": return renderBinds(wrap, f, val);
+    case "githubtokens": return renderGithubTokens(wrap, f, val);
     case "stringlist": return renderStringList(wrap, f, val);
     case "peoplemap": return renderPeople(wrap, f, val);
     case "greetings": return renderGreetings(wrap, f, val);
@@ -458,6 +566,42 @@ function renderBinds(wrap, f, val) {
     const add = el("button", { type: "button", class: "ghost", text: "+ Add" });
     add.addEventListener("click", () => { const v = inp.value.trim(); if (v && !rows.includes(v)) { rows.push(v); draw(); commit(); } });
     container.appendChild(el("div", { class: "list-row" }, [inp, add]));
+  }
+  draw();
+  return wrap;
+}
+
+function renderGithubTokens(wrap, f, val) {
+  const rows = Array.isArray(val) ? val.map((t) => Object.assign({}, t)) : [];
+  const container = el("div");
+  wrap.appendChild(container);
+  function commit() {
+    setPath(state.config, f.path, rows.filter((r) => r.key).map((r) => ({ label: r.label || r.key, key: r.key })));
+    markDirty();
+  }
+  function ensureKey(r) {
+    if (r.key) return;
+    const slug = (r.label || "").toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    r.key = slug ? "GITHUB_TOKEN_" + slug : "GITHUB_TOKEN_" + (rows.indexOf(r) + 1);
+  }
+  function draw() {
+    container.innerHTML = "";
+    rows.forEach((r, idx) => {
+      ensureKey(r);
+      const label = el("input", { type: "text", value: r.label || "", placeholder: "label (e.g. personal)" });
+      const keyHint = el("div", { class: "hint", text: "env var: " + r.key });
+      label.addEventListener("input", () => { r.label = label.value; commit(); });
+      const isSet = !!(state.secrets && state.secrets[r.key]);
+      const tok = el("input", { type: "password", placeholder: isSet ? "•••••• (leave blank to keep)" : "paste token" });
+      tok.addEventListener("input", () => { state.secretEdits[r.key] = tok.value; markDirty(); });
+      const rm = el("button", { type: "button", class: "ghost", text: "✕" });
+      rm.addEventListener("click", () => { state.secretEdits[r.key] = null; rows.splice(idx, 1); draw(); commit(); });
+      container.appendChild(el("div", { class: "list-row" }, [label, tok, rm]));
+      container.appendChild(keyHint);
+    });
+    const add = el("button", { type: "button", class: "ghost", text: "+ Add GitHub token" });
+    add.addEventListener("click", () => { rows.push({ label: "", key: "" }); draw(); });
+    container.appendChild(add);
   }
   draw();
   return wrap;
@@ -687,7 +831,10 @@ async function saveAll() {
   try {
     await api("PUT", "/api/config", { config: state.config });
     const secretUpdates = {};
-    for (const [k, v] of Object.entries(state.secretEdits)) if (v && v.trim()) secretUpdates[k] = v.trim();
+    for (const [k, v] of Object.entries(state.secretEdits)) {
+      if (v === null) secretUpdates[k] = null;           // delete
+      else if (v && v.trim()) secretUpdates[k] = v.trim(); // set
+    }
     if (Object.keys(secretUpdates).length) { const r = await api("PUT", "/api/secrets", { secrets: secretUpdates }); state.secrets = r.secrets; }
     for (const [name, content] of Object.entries(state.personaEdits)) await api("PUT", "/api/persona/" + name, { content });
     state.secretEdits = {}; state.personaEdits = {}; state.dirty = false;

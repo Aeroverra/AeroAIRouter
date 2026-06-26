@@ -25,84 +25,24 @@
     </div>
   </template>
 
-  <!-- Setup wizard (used for first-run AND re-run from the dashboard) -->
+  <!-- Setup wizard — multi-step (first-run AND re-run from the dashboard) -->
   <template id="tpl-setup">
     <div class="center">
-      <form class="card auth-card wide" data-form="setup">
-        <h1 data-setup-title>Welcome to AeroAIRouter</h1>
-        <p class="muted" data-setup-sub>First-run setup. Fields marked * are required.</p>
-
-        <div data-when="needsPassword">
-          <label>Setup code <span class="hint">(shown in the server console)</span>
-            <input name="setupCode" placeholder="e.g. a1b2c3d4" />
-          </label>
-          <label>Admin password *
-            <input type="password" name="password" autocomplete="new-password" minlength="8" />
-          </label>
-          <label>Confirm password *
-            <input type="password" name="password2" autocomplete="new-password" minlength="8" />
-          </label>
-          <hr />
+      <div class="card wizard">
+        <div class="wiz-head">
+          <h1 data-setup-title>Set up AeroAIRouter</h1>
+          <div class="wiz-progress" data-progress></div>
         </div>
-
-        <h3>Bot identity</h3>
-        <label>Bot name <span class="hint">(used as the wake word in busy channels / voice)</span>
-          <input name="botName" placeholder="e.g. Azula" />
-        </label>
-
-        <h3>Discord</h3>
-        <label>Discord bot token *
-          <span class="hint" data-secret-note></span>
-          <div class="row">
-            <input name="DISCORD_TOKEN" />
-            <button type="button" class="ghost" data-action="test-token">Test</button>
-          </div>
-          <span class="check" data-token-check></span>
-        </label>
-        <label>Your Discord user ID *
-          <input name="ownerId" />
-        </label>
-        <div class="field">
-          <label>Channels the bot responds in</label>
-          <span class="hint">Test your token above, then pick servers &amp; channels by name. You can also do this later.</span>
-          <div data-setup-channels></div>
-        </div>
-
-        <h3>Claude</h3>
-        <label>Auth mode
-          <select name="authMode">
-            <option value="auto">Auto (API key if set, else OAuth)</option>
-            <option value="apikey">API key</option>
-            <option value="oauth">OAuth setup-token</option>
-          </select>
-        </label>
-        <label>Anthropic API key
-          <span class="hint" data-secret-note></span>
-          <input name="ANTHROPIC_API_KEY" />
-        </label>
-        <label>Claude OAuth setup-token
-          <span class="hint" data-secret-note></span>
-          <input name="CLAUDE_CODE_OAUTH_TOKEN" />
-        </label>
-        <label>Model
-          <input name="model" value="claude-opus-4-8" />
-        </label>
-
-        <h3>Optional</h3>
-        <label>Signature emoji <span class="hint">(appended to messages; blank for none)</span>
-          <input name="emoji" />
-        </label>
-        <label>Brave Search API key <span class="hint">(enables web search)</span>
-          <span class="hint" data-secret-note></span>
-          <input name="BRAVE_API_KEY" />
-        </label>
-
-        <div class="row">
-          <button type="submit" data-setup-submit>Finish setup</button>
-          <button type="button" class="ghost" data-action="setup-cancel" hidden>Cancel</button>
-        </div>
+        <div class="wiz-body" data-body></div>
         <p class="err" data-err></p>
-      </form>
+        <div class="wiz-nav">
+          <button type="button" class="ghost" data-back hidden>← Back</button>
+          <span class="spacer"></span>
+          <button type="button" class="ghost" data-cancel hidden>Cancel</button>
+          <button type="button" data-next>Next →</button>
+          <button type="button" data-finish hidden>Finish</button>
+        </div>
+      </div>
     </div>
   </template>
 
