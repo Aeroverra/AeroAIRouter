@@ -1,0 +1,23 @@
+{
+  "name": "aeroairouter",
+  "version": "1.0.0",
+  "description": "Self-hostable Discord <-> Claude router with tools, plugins, and configurable personality",
+  "type": "module",
+  "main": "src/index.js",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "setup": "bash scripts/install.sh",
+    "update": "bash scripts/update.sh",
+    "test": "node --test test/test-suite.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@discordjs/opus": "^0.10.0",
+    "@discordjs/voice": "^0.19.2",
+    "discord.js": "^14.18.0",
+    "sodium-native": "^5.1.0"
+  }
+}

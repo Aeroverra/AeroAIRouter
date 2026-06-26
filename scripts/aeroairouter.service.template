@@ -1,0 +1,16 @@
+[Unit]
+Description=AeroAIRouter (Discord <-> Claude router)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__INSTALL_DIR__
+ExecStart=__NODE__ __INSTALL_DIR__/src/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=AIROUTER_HOME=__AIROUTER_HOME__
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,30 @@
+{
+  "discord": {
+    "ownerId": "YOUR_DISCORD_USER_ID",
+    "elevatedUsers": [],
+    "allowedBots": [],
+    "wakeWord": "",
+    "presenceGreetings": [],
+    "guilds": {
+      "home":   { "id": "YOUR_HOME_GUILD_ID",   "channels": { "bot": "BOT_CHANNEL_ID", "general": "GENERAL_CHANNEL_ID" } },
+      "public": { "id": "YOUR_PUBLIC_GUILD_ID", "channels": { "bot": "BOT_CHANNEL_ID", "general": "GENERAL_CHANNEL_ID" } }
+    },
+    "people": {
+      "YOUR_DISCORD_USER_ID": { "name": "You", "trust": "owner" }
+    },
+    "activity": { "text": "online", "type": 0, "url": "" }
+  },
+  "ai": {
+    "auth": { "mode": "auto" },
+    "accountUuid": "",
+    "models": { "casual": "claude-opus-4-8", "complex": "claude-opus-4-8" },
+    "maxTokens": 128000,
+    "maxHistoryPerChannel": 100
+  },
+  "persona": { "emoji": "" },
+  "features": { "voice": false },
+  "voice": { "channelId": "", "whisperPath": "", "edgeTtsPath": "", "ttsCacheDir": "/tmp/aeroairouter-tts" },
+  "plugins": { "enabled": [], "config": {} },
+  "review": { "policy": "allow", "dangerPatterns": [], "allowReviewerOverride": false },
+  "update": { "enabled": false, "branch": "main", "intervalHours": 24, "channelId": "" }
+}
