@@ -173,7 +173,12 @@ export function createApp() {
   app.get("/api/csrf", requireAuth, (req, res) => res.json({ csrf: csrfToken(req) }));
 
   // ---- validate a Discord bot token against the Discord API ----
+  // Open only during first-run setup; once set up it requires a valid session
+  // (so a set-up instance can't be used as an unauthenticated Discord oracle).
   app.post("/api/check-discord", loginLimiter, async (req, res) => {
+    if (auth.passwordIsSet() && !(req.session && req.session.authed)) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
     const token = (req.body && req.body.token) || "";
     if (!token) return res.status(400).json({ ok: false, error: "no token" });
     try {
