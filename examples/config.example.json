@@ -28,5 +28,5 @@
   "plugins": { "enabled": [], "config": {} },
   "review": { "policy": "allow", "dangerPatterns": [], "allowReviewerOverride": false },
   "update": { "enabled": false, "branch": "main", "intervalHours": 24, "channelId": "" },
-  "ui": { "host": "0.0.0.0", "port": 8787, "mdns": true, "serviceName": "aeroairouter.service", "selfService": "aeroairouter-ui.service" }
+  "ui": { "hosts": ["0.0.0.0"], "port": 8787, "mdns": true, "serviceName": "aeroairouter.service", "selfService": "aeroairouter-ui.service" }
 }

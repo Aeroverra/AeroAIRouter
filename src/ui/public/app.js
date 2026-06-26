@@ -131,7 +131,7 @@ function renderSetup(mode, status) {
         el("span", { class: "hint", text: (r.guild ? " · " + r.guild : "") + "  (" + r.id + ")" }),
       ]);
       const mode = el("select");
-      [["all", "respond to all"], ["addressed", "only when addressed"], ["off", "off"]].forEach(([v, t]) => mode.appendChild(el("option", { value: v, text: t })));
+      [["all", "respond to all"], ["addressed", "when addressed (@, reply, wake-word, owner)"], ["mention", "only when @-mentioned"], ["off", "off"]].forEach(([v, t]) => mode.appendChild(el("option", { value: v, text: t })));
       mode.value = r.mode || "addressed"; mode.addEventListener("change", () => { r.mode = mode.value; });
       const rm = el("button", { type: "button", class: "ghost", text: "✕" });
       rm.addEventListener("click", () => { setupChannels.splice(idx, 1); drawChans(); });
@@ -369,6 +369,7 @@ function renderField(f) {
       wrap.appendChild(s);
       break;
     }
+    case "binds": return renderBinds(wrap, f, val);
     case "stringlist": return renderStringList(wrap, f, val);
     case "peoplemap": return renderPeople(wrap, f, val);
     case "greetings": return renderGreetings(wrap, f, val);
@@ -414,6 +415,51 @@ function renderPersona(wrap, f) {
   }
   ta.addEventListener("input", () => { state.personaEdits[f.persona] = ta.value; markDirty(); });
   wrap.appendChild(ta);
+  return wrap;
+}
+
+function renderBinds(wrap, f, val) {
+  let rows = Array.isArray(val) ? val.slice() : (typeof val === "string" && val ? [val] : []);
+  if (rows.length === 0) rows = ["0.0.0.0"];
+  const container = el("div");
+  wrap.appendChild(container);
+  function commit() { setPath(state.config, f.path, rows.slice()); markDirty(); }
+  function draw() {
+    container.innerHTML = "";
+    // current binds as chips
+    const cur = el("div", { class: "suggestions" });
+    rows.forEach((addr, idx) => {
+      const x = el("button", { type: "button", class: "ghost", text: "✕" });
+      x.addEventListener("click", () => { rows.splice(idx, 1); if (rows.length === 0) rows.push("0.0.0.0"); draw(); commit(); });
+      cur.appendChild(el("span", { class: "bind-chip" }, [el("span", { text: addr }), x]));
+    });
+    container.appendChild(cur);
+    if (rows.includes("0.0.0.0")) container.appendChild(el("p", { class: "hint", text: "0.0.0.0 already covers all interfaces — other addresses are ignored while it's listed." }));
+
+    // clickable suggestions
+    const sug = el("div", { class: "suggestions" });
+    container.appendChild(sug);
+    if (!state.netAvailable) {
+      sug.appendChild(el("span", { class: "hint", text: "loading available addresses…" }));
+      api("GET", "/api/netinfo").then((r) => { state.netAvailable = r.available || []; draw(); }).catch(() => {});
+    } else {
+      sug.appendChild(el("span", { class: "hint", text: "Click to add: " }));
+      const choices = state.netAvailable.filter((s) => !rows.includes(s.address));
+      if (!choices.length) sug.appendChild(el("span", { class: "hint", text: "(all detected addresses added)" }));
+      choices.forEach((s) => {
+        const b = el("button", { type: "button", class: "ghost chip", text: "+ " + s.address + "  " + s.label });
+        b.addEventListener("click", () => { if (!rows.includes(s.address)) { rows.push(s.address); draw(); commit(); } });
+        sug.appendChild(b);
+      });
+    }
+
+    // manual add
+    const inp = el("input", { type: "text", placeholder: "add an address manually" });
+    const add = el("button", { type: "button", class: "ghost", text: "+ Add" });
+    add.addEventListener("click", () => { const v = inp.value.trim(); if (v && !rows.includes(v)) { rows.push(v); draw(); commit(); } });
+    container.appendChild(el("div", { class: "list-row" }, [inp, add]));
+  }
+  draw();
   return wrap;
 }
 
@@ -540,7 +586,7 @@ function renderChannels(wrap, f, val) {
         el("span", { class: "hint", text: (r.guild ? " · " + r.guild : "") + "  (" + r.id + ")" }),
       ]);
       const mode = el("select");
-      [["all", "respond to all"], ["addressed", "only when addressed"], ["off", "off"]].forEach(([v, t]) => mode.appendChild(el("option", { value: v, text: t })));
+      [["all", "respond to all"], ["addressed", "when addressed (@, reply, wake-word, owner)"], ["mention", "only when @-mentioned"], ["off", "off"]].forEach(([v, t]) => mode.appendChild(el("option", { value: v, text: t })));
       mode.value = r.mode || "addressed";
       mode.addEventListener("change", () => { r.mode = mode.value; commit(); });
       const botsCb = el("input", { type: "checkbox" }); botsCb.checked = !!r.respondToBots; botsCb.style.width = "auto";

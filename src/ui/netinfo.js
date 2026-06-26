@@ -27,6 +27,16 @@ export function listAddresses() {
   return out;
 }
 
+// Suggested bind addresses to offer in the UI (click to add).
+export function bindSuggestions() {
+  const out = [
+    { address: "0.0.0.0", kind: "all", label: "All interfaces (LAN + Tailscale)" },
+    { address: "127.0.0.1", kind: "local", label: "localhost only" },
+  ];
+  for (const a of listAddresses()) out.push({ address: a.address, kind: a.kind, label: a.kind + " · " + a.iface });
+  return out;
+}
+
 export function accessUrls(port) {
   const urls = listAddresses().map((a) => ({
     kind: a.kind,

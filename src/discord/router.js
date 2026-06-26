@@ -55,8 +55,12 @@ export function shouldRespond(message, botId) {
 
   if (ch.mode === "all") return true;
 
-  // "addressed" mode: reply only when clearly directed at the bot.
   const mentioned = message.mentions.users.has(botId);
+
+  // "mention" mode: ONLY a real @-mention of the bot — nothing else.
+  if (ch.mode === "mention") return mentioned;
+
+  // "addressed" mode: reply when clearly directed at the bot (@, owner, wake word).
   if (mentioned) return true;
   if (message.author.id === config.discord.ownerId) return true;
   if (message.reference && !mentioned) return false; // reply to someone else

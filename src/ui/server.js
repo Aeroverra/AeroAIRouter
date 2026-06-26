@@ -11,7 +11,7 @@ import { execFile } from "child_process";
 import { INSTALL_DIR } from "../config/paths.js";
 import * as io from "./configio.js";
 import * as auth from "./auth.js";
-import { accessUrls, advertiseMdns } from "./netinfo.js";
+import { accessUrls, advertiseMdns, bindSuggestions } from "./netinfo.js";
 import { SECTIONS } from "./schema.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -20,9 +20,12 @@ const PUBLIC_DIR = join(__dirname, "public");
 function uiSettings() {
   const cfg = io.configExists() ? io.readConfig() : {};
   const ui = cfg.ui || {};
+  // Multi-bind: ui.hosts is an array; fall back to legacy ui.host, then 0.0.0.0.
+  let hosts = Array.isArray(ui.hosts) && ui.hosts.length ? ui.hosts.slice() : (ui.host ? [ui.host] : ["0.0.0.0"]);
+  if (process.env.AIROUTER_UI_HOST) hosts = [process.env.AIROUTER_UI_HOST];
   return {
     port: Number(process.env.AIROUTER_UI_PORT || ui.port || 8787),
-    host: process.env.AIROUTER_UI_HOST || ui.host || "0.0.0.0",
+    hosts,
     serviceName: ui.serviceName || "aeroairouter.service",
     selfService: ui.selfService || "aeroairouter-ui.service",
     mdns: ui.mdns !== false,
@@ -318,7 +321,8 @@ export function createApp() {
 
   // ---- network info ----
   app.get("/api/netinfo", requireAuth, (req, res) => {
-    res.json({ urls: accessUrls(uiSettings().port) });
+    const s = uiSettings();
+    res.json({ urls: accessUrls(s.port), available: bindSuggestions(), current: s.hosts });
   });
 
   // ---- bot control ----
@@ -355,15 +359,21 @@ export function createApp() {
 }
 
 export async function startUi() {
-  const { port, host, mdns } = uiSettings();
+  const { port, hosts, mdns } = uiSettings();
   const app = createApp();
   const token = ensureSetupToken();
 
-  await new Promise((resolve) => {
-    app.listen(port, host, () => resolve());
-  });
+  // 0.0.0.0 already covers every interface, so don't also bind specific IPs
+  // (that would EADDRINUSE). Otherwise bind each requested address.
+  const binds = hosts.includes("0.0.0.0") ? ["0.0.0.0"] : [...new Set(hosts)];
+  for (const h of binds) {
+    await new Promise((resolve) => {
+      const server = app.listen(port, h, () => { console.log("[ui] listening on " + h + ":" + port); resolve(); });
+      server.on("error", (e) => { console.error("[ui] bind failed on " + h + ": " + e.message); resolve(); });
+    });
+  }
 
-  console.log("[ui] AeroAIRouter config UI listening on " + host + ":" + port);
+  console.log("[ui] AeroAIRouter config UI bound to: " + binds.join(", ") + " (port " + port + ")");
   if (token) {
     console.log("\n  ╭───────────────────────────────────────────────╮");
     console.log("  │  FIRST-RUN SETUP CODE: " + token + "                  │");

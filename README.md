@@ -97,7 +97,7 @@ Set the mode in `config.json` under `ai.auth.mode`:
 | `discord.elevatedUsers` | User ids with elevated tool access (no shell/file tools — owner only). |
 | `discord.allowedBots` | Bot user ids the router is allowed to respond to (default: none). |
 | `discord.wakeWord` | Word that triggers a reply in addressed channels / voice (e.g. the bot's name). |
-| `discord.channels` | Per-channel rules: `[{ id, mode: "all"\|"addressed"\|"off", respondToBots }]`. Falls back to the guild channels if empty. |
+| `discord.channels` | Per-channel rules: `[{ id, mode, respondToBots }]` where mode is `all`, `addressed` (@/reply/wake-word/owner), `mention` (only a real @-mention), or `off`. Falls back to the guild channels if empty. |
 | `discord.guilds.home` / `.public` | Two guild "roles" with `channels.bot` and `channels.general`. A single-server setup can point both at the same guild. |
 | `discord.people` | Map of user id → `{ name, trust }` (`owner`/`elevated`/`light`). |
 | `discord.activity` | Presence: `{ text, type, url }`. |
