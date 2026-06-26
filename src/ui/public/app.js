@@ -442,54 +442,103 @@ function renderGreetings(wrap, f, val) {
 function renderChannels(wrap, f, val) {
   const rows = Array.isArray(val) ? val.map((c) => Object.assign({}, c)) : [];
   const container = el("div");
-  function commit() { setPath(state.config, f.path, rows.filter((r) => r.id)); markDirty(); }
-  function labelFor(id) {
-    if (!state.discordChannels) return id;
-    for (const g of state.discordChannels) for (const ch of g.channels) if (ch.id === id) return "#" + ch.name + " (" + g.guildName + ")";
-    return id;
+  wrap.appendChild(container);
+
+  function commit() {
+    setPath(
+      state.config,
+      f.path,
+      rows.filter((r) => r.id).map((r) => ({ id: r.id, name: r.name, guild: r.guild, mode: r.mode || "addressed", respondToBots: !!r.respondToBots }))
+    );
+    markDirty();
   }
+  function resolve(id) {
+    if (!state.discordChannels) return null;
+    for (const g of state.discordChannels) for (const ch of g.channels) if (ch.id === id) return { name: ch.name, guild: g.guildName };
+    return null;
+  }
+
+  function load(force) {
+    if (state.discordChannelsLoading) return;
+    if (state.discordChannels && !force) return;
+    state.discordChannelsLoading = true;
+    state.discordChannelsError = null;
+    draw();
+    api("GET", "/api/discord/channels")
+      .then((r) => { state.discordChannels = r.guilds || []; state.discordChannelsLoading = false; draw(); })
+      .catch((ex) => { state.discordChannelsLoading = false; state.discordChannelsError = ex.message; draw(); });
+  }
+
   function draw() {
     container.innerHTML = "";
+
+    // configured channels — show friendly names
     rows.forEach((r, idx) => {
-      const idLabel = el("input", { type: "text", value: r.id || "", placeholder: "channel ID" });
-      idLabel.addEventListener("input", () => { r.id = idLabel.value; commit(); });
+      const got = resolve(r.id);
+      if (got) { r.name = got.name; r.guild = got.guild; }
+      const label = el("div", { class: "chan-label" }, [
+        el("strong", { text: r.name ? "#" + r.name : r.id }),
+        el("span", { class: "hint", text: (r.guild ? " · " + r.guild : "") + "  (" + r.id + ")" }),
+      ]);
       const mode = el("select");
       [["all", "respond to all"], ["addressed", "only when addressed"], ["off", "off"]].forEach(([v, t]) => mode.appendChild(el("option", { value: v, text: t })));
       mode.value = r.mode || "addressed";
       mode.addEventListener("change", () => { r.mode = mode.value; commit(); });
       const botsCb = el("input", { type: "checkbox" }); botsCb.checked = !!r.respondToBots; botsCb.style.width = "auto";
       botsCb.addEventListener("change", () => { r.respondToBots = botsCb.checked; commit(); });
-      const botsL = el("label", { class: "switch" }, [botsCb, " bots"]);
+      const botsL = el("label", { class: "switch" }, [botsCb, " answer bots"]);
       const rm = el("button", { class: "ghost", text: "✕" });
       rm.addEventListener("click", () => { rows.splice(idx, 1); draw(); commit(); });
-      const nameTag = el("span", { class: "hint", text: labelFor(r.id) });
-      container.appendChild(el("div", { class: "list-row" }, [idLabel, mode, botsL, rm]));
-      container.appendChild(el("div", { class: "hint", text: nameTag.textContent }));
+      container.appendChild(el("div", { class: "chan-row" }, [label, mode, botsL, rm]));
     });
-    // picker
-    const picker = el("select");
-    picker.appendChild(el("option", { value: "", text: "— pick a channel to add —" }));
-    if (state.discordChannels) {
-      for (const g of state.discordChannels) for (const ch of g.channels) {
-        picker.appendChild(el("option", { value: ch.id, text: "#" + ch.name + " — " + g.guildName }));
-      }
+    if (rows.length === 0) container.appendChild(el("p", { class: "hint", text: "No channels configured yet — add one below." }));
+
+    // status line
+    if (state.discordChannelsLoading) container.appendChild(el("p", { class: "hint", text: "Loading your servers from Discord…" }));
+    else if (state.discordChannelsError) container.appendChild(el("p", { class: "err", text: "Couldn't load channels: " + state.discordChannelsError }));
+
+    // two-step picker: server -> channel -> add
+    if (state.discordChannels && state.discordChannels.length) {
+      const guildSel = el("select");
+      guildSel.appendChild(el("option", { value: "", text: "— select a server —" }));
+      state.discordChannels.forEach((g, i) => guildSel.appendChild(el("option", { value: String(i), text: g.guildName })));
+      const chanSel = el("select"); chanSel.disabled = true; chanSel.appendChild(el("option", { value: "", text: "— select a channel —" }));
+      guildSel.addEventListener("change", () => {
+        chanSel.innerHTML = "";
+        chanSel.appendChild(el("option", { value: "", text: "— select a channel —" }));
+        const g = state.discordChannels[Number(guildSel.value)];
+        if (g) {
+          chanSel.disabled = false;
+          g.channels.filter((ch) => !rows.some((r) => r.id === ch.id)).forEach((ch) => chanSel.appendChild(el("option", { value: ch.id, text: "#" + ch.name })));
+        } else chanSel.disabled = true;
+      });
+      const addBtn = el("button", { class: "ghost", text: "+ Add channel" });
+      addBtn.addEventListener("click", () => {
+        const g = state.discordChannels[Number(guildSel.value)];
+        const id = chanSel.value;
+        if (g && id && !rows.some((r) => r.id === id)) {
+          const ch = g.channels.find((c) => c.id === id);
+          rows.push({ id, name: ch ? ch.name : "", guild: g.guildName, mode: "addressed", respondToBots: false });
+          draw(); commit();
+        }
+      });
+      const refresh = el("button", { class: "ghost", text: "↻ Refresh" });
+      refresh.addEventListener("click", () => load(true));
+      container.appendChild(el("div", { class: "picker" }, [guildSel, chanSel, addBtn, refresh]));
+    } else if (!state.discordChannelsLoading) {
+      const loadBtn = el("button", { class: "ghost", text: state.discordChannelsError ? "Retry" : "Load servers from Discord" });
+      loadBtn.addEventListener("click", () => load(true));
+      container.appendChild(el("div", { class: "list-row" }, [loadBtn]));
     }
-    picker.addEventListener("change", () => {
-      if (picker.value && !rows.some((r) => r.id === picker.value)) { rows.push({ id: picker.value, mode: "addressed", respondToBots: false }); draw(); commit(); }
-    });
-    const loadBtn = el("button", { class: "ghost", text: state.discordChannels ? "Reload channels" : "Load channels from Discord" });
-    loadBtn.addEventListener("click", async () => {
-      loadBtn.textContent = "Loading…";
-      try { const r = await api("GET", "/api/discord/channels"); state.discordChannels = r.guilds || []; draw(); }
-      catch (ex) { toast(ex.message, true); loadBtn.textContent = "Retry load"; }
-    });
+
+    // manual fallback
     const manual = el("button", { class: "ghost", text: "+ Add by ID" });
-    manual.addEventListener("click", () => { rows.push({ id: "", mode: "addressed", respondToBots: false }); draw(); });
-    container.appendChild(el("div", { class: "list-row" }, [picker]));
-    container.appendChild(el("div", { class: "list-row" }, [loadBtn, manual]));
+    manual.addEventListener("click", () => { const id = prompt("Channel ID:"); if (id && id.trim()) { rows.push({ id: id.trim(), mode: "addressed", respondToBots: false }); draw(); commit(); } });
+    container.appendChild(el("div", { class: "list-row" }, [manual]));
   }
+
   draw();
-  wrap.appendChild(container);
+  load(false); // auto-load on open
   return wrap;
 }
 
