@@ -72,6 +72,8 @@ export function createApp() {
           "connect-src": ["'self'"],
           "object-src": ["'none'"],
           "frame-ancestors": ["'none'"],
+          // Served over plain HTTP on LAN/Tailscale — must NOT force https upgrades.
+          "upgrade-insecure-requests": null,
         },
       },
     })
