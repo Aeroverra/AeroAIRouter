@@ -179,16 +179,15 @@ export function Dashboard({ navigate }) {
       <div class="dash-hero">
         <div>
           <h1>Dashboard</h1>
-          <p class="muted">Bot service: <span class={`status ${pill === "active" ? "ok" : pill === "?" || pill === "…" ? "idle" : "warn"}`}><span class="dot" />{pill}</span></p>
+          <p class="sub">Bot service: <span class={`status ${pill === "active" ? "ok" : pill === "?" || pill === "…" ? "idle" : "warn"}`}><span class="dot" />{pill}</span></p>
         </div>
-        <Btn variant="primary" icon="restart" onClick={restartBot}>Restart bot</Btn>
       </div>
 
       <div class="stat-grid">
-        <Stat num={channels} label="Channels watched" sub={channels === 1 ? "1 channel" : channels + " channels"} />
-        <Stat num={enabled.length} label="Plugins active" sub={installed.length + " installed"} brand />
-        <Stat num={toolCount == null ? "…" : toolCount} label="MCP tools" sub={mcp ? `${connected}/${(mcp.servers || []).length} servers connected` : "loading"} />
-        <Stat num={authMode} label="Claude auth" sub={model} />
+        <Stat icon="discord" num={channels} label="Channels watched" sub={channels === 1 ? "1 channel" : channels + " channels"} />
+        <Stat icon="plugins" num={enabled.length} label="Plugins active" sub={installed.length + " installed"} />
+        <Stat icon="mcp" num={toolCount == null ? "…" : toolCount} label="MCP tools" sub={mcp ? `${connected}/${(mcp.servers || []).length} servers connected` : "loading"} />
+        <Stat icon="cog" num={authMode} label="Claude auth" sub={model} />
       </div>
 
       <Card class="card-pad" style="margin-bottom:16px">
@@ -213,8 +212,11 @@ export function Dashboard({ navigate }) {
     </div>
   );
 }
-const Stat = ({ num, label, sub, brand }) => (
-  <div class="stat"><div class={`num ${brand ? "brand" : ""}`}>{num}</div><div class="lbl">{label}</div><div class="sub">{sub || ""}</div></div>
+const Stat = ({ num, label, sub, icon }) => (
+  <div class="stat">
+    {icon && <div class="ico"><Icon name={icon} size={17} /></div>}
+    <div class="num">{num}</div><div class="lbl">{label}</div><div class="sub">{sub || ""}</div>
+  </div>
 );
 
 // ============================================================ SETTINGS =======

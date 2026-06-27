@@ -21,11 +21,11 @@ export function PluginsList({ navigate }) {
       {available.length > 0 && <>
         <div class="seg"><h3>Available to reinstall</h3></div>
         <div class="rows">{available.map((p) => (
-          <Card class="card-pad dim">
+          <Card class="plugin-card dim">
             <div class="row"><strong>{p.label || p.name}</strong>{p.bundled && <Badge>bundled</Badge>}<span class="spacer" />
-              <Btn variant="secondary" onClick={async () => { try { await api("POST", "/api/plugins/" + p.name + "/reinstall"); toast("Reinstalled " + (p.label || p.name) + ". Restart the bot to apply."); await reloadPlugins(); } catch (ex) { toast(ex.message, "bad"); } }}>Reinstall</Btn>
+              <Btn variant="secondary" size="sm" onClick={async () => { try { await api("POST", "/api/plugins/" + p.name + "/reinstall"); toast("Reinstalled " + (p.label || p.name) + ". Restart the bot to apply."); await reloadPlugins(); } catch (ex) { toast(ex.message, "bad"); } }}>Reinstall</Btn>
             </div>
-            {p.description && <p class="hint" style="margin-top:6px">{p.description}</p>}
+            {p.description && <p class="pc-desc">{p.description}</p>}
           </Card>
         ))}</div>
       </>}
@@ -48,7 +48,7 @@ function PluginCard({ p, navigate }) {
     try { await api("DELETE", "/api/plugins/" + p.name); toast("Uninstalled " + (p.label || p.name) + "."); await reloadPlugins(); } catch (ex) { toast(ex.message, "bad"); }
   }
   return (
-    <Card class="card-pad">
+    <Card class="plugin-card">
       <div class="row">
         <strong>{p.label || p.name}</strong>
         {p.hasMcp && <Badge kind="brand">MCP</Badge>}
@@ -57,12 +57,12 @@ function PluginCard({ p, navigate }) {
         <span class="spacer" />
         <Switch checked={enabled} onChange={toggle} label={enabled ? "enabled" : "disabled"} />
       </div>
-      {p.description && <p class="hint" style="margin-top:6px">{p.description}</p>}
+      {p.description && <p class="pc-desc">{p.description}</p>}
       {p.broken && <p class="field-err">{p.error || "failed to load"}</p>}
-      <div class="card-actions" style="margin:12px -20px -16px;padding-left:20px;padding-right:20px">
-        {configurable(p) && <Btn variant="secondary" onClick={() => navigate("__plugin:" + p.name)}>{p.ui ? "Set up →" : "Configure →"}</Btn>}
+      <div class="pc-actions">
+        {configurable(p) && <Btn variant="secondary" size="sm" onClick={() => navigate("__plugin:" + p.name)}>{p.ui ? "Set up →" : "Configure →"}</Btn>}
         <span class="spacer" />
-        <Btn variant="danger" onClick={uninstall}>Uninstall</Btn>
+        <Btn variant="danger" size="sm" onClick={uninstall}>Uninstall</Btn>
       </div>
     </Card>
   );
