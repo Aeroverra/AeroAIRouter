@@ -8,6 +8,7 @@ import { bootCatchUp } from "./discord/bootup.js";
 import { startVoiceMonitor, stopVoiceMonitor, setupVoiceAutoJoin } from "./discord/voice.js";
 import { resumePersistedAgents } from "./discord/subagent.js";
 import { loadPlugins } from "./plugins/loader.js";
+import { startMcp } from "./mcp/client.js";
 import { setUpdateClient, startSelfUpdate, stopSelfUpdate } from "./tools/self-update.js";
 import { writeFileSync, readFileSync, existsSync, unlinkSync } from "fs";
 import { join } from "path";
@@ -52,6 +53,7 @@ async function start() {
   loadCache();
   startWatching();
   await loadPlugins();
+  await startMcp(); // after plugins (so plugin MCP servers register) + before messages
   await startDiscord();
 
   const client = getDiscordClient();

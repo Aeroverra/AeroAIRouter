@@ -23,8 +23,14 @@ export const SECRET_KEYS = [
 // GitHub tokens are dynamic: GITHUB_TOKEN or GITHUB_TOKEN_<SLUG> (multiple).
 const GITHUB_KEY_RE = /^GITHUB_TOKEN(_[A-Z0-9_]+)?$/;
 
+// Secret keys declared by plugins (registered at runtime by the UI server).
+const extraSecretKeys = new Set();
+export function allowSecretKeys(keys) {
+  for (const k of keys || []) if (/^[A-Z][A-Z0-9_]*$/.test(k)) extraSecretKeys.add(k);
+}
+
 function isAllowedSecretKey(k) {
-  return SECRET_KEYS.includes(k) || GITHUB_KEY_RE.test(k);
+  return SECRET_KEYS.includes(k) || GITHUB_KEY_RE.test(k) || extraSecretKeys.has(k);
 }
 
 export const PERSONA_FILES = ["soul.md", "heartbeat.md", "memory.md"];
@@ -85,6 +91,7 @@ export function secretPresence() {
   const map = readSecretsMap();
   const out = {};
   for (const k of SECRET_KEYS) out[k] = !!(process.env[k] || map[k]);
+  for (const k of extraSecretKeys) out[k] = !!(process.env[k] || map[k]);
   for (const k of Object.keys(map)) if (GITHUB_KEY_RE.test(k)) out[k] = !!map[k];
   for (const k of Object.keys(process.env)) if (GITHUB_KEY_RE.test(k)) out[k] = true;
   return out;

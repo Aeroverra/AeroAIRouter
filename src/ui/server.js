@@ -8,11 +8,38 @@ import { randomBytes } from "crypto";
 import { readFileSync, existsSync } from "fs";
 import { execFile } from "child_process";
 
-import { INSTALL_DIR } from "../config/paths.js";
+import { INSTALL_DIR, DATA_DIR } from "../config/paths.js";
 import * as io from "./configio.js";
 import * as auth from "./auth.js";
 import { accessUrls, advertiseMdns, bindSuggestions } from "./netinfo.js";
 import { SECTIONS } from "./schema.js";
+import { discoverPlugins, isPluginEnabled } from "../plugins/registry.js";
+
+// Live MCP status written by the bot process at startup (DATA_DIR/mcp-status.json).
+function readMcpStatus() {
+  try {
+    const raw = readFileSync(join(DATA_DIR, "mcp-status.json"), "utf8");
+    const arr = JSON.parse(raw);
+    const byName = {};
+    for (const s of arr) byName[s.name] = s;
+    return byName;
+  } catch {
+    return {};
+  }
+}
+
+// Plugin secret keys are allowed in secrets.env too — register them once.
+let _secretKeysSynced = false;
+async function syncPluginSecretKeys() {
+  if (_secretKeysSynced) return;
+  _secretKeysSynced = true;
+  try {
+    const ps = await discoverPlugins();
+    io.allowSecretKeys(ps.flatMap((p) => p.secrets || []));
+  } catch {}
+}
+
+const PLUGIN_NAME_RE = /^[A-Za-z0-9_-]+$/;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "public");
@@ -82,6 +109,7 @@ function ensureSetupToken() {
 }
 
 export function createApp() {
+  syncPluginSecretKeys();
   const app = express();
   app.disable("x-powered-by");
   // Directly exposed (no reverse proxy), so DON'T trust X-Forwarded-* — otherwise
@@ -281,6 +309,111 @@ export function createApp() {
     try {
       io.updateSecrets(updates);
       res.json({ ok: true, secrets: io.secretPresence() });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ---- MCP servers (direct + plugin-provided) ----
+  app.get("/api/mcp", requireAuth, async (req, res) => {
+    const cfg = io.readConfig();
+    const direct = cfg.mcp && Array.isArray(cfg.mcp.servers) ? cfg.mcp.servers : [];
+    const live = readMcpStatus();
+    const out = [];
+    for (const s of direct) {
+      const l = live[s.name] || {};
+      out.push({
+        name: s.name, label: s.name, source: "direct", managed: false,
+        transport: s.transport || "stdio", command: s.command, args: s.args || [],
+        env: s.env || {}, enabled: s.enabled !== false, trust: s.trust || "owner",
+        status: l.status || "not running", error: l.error || null, tools: l.tools || [],
+      });
+    }
+    let plugins = [];
+    try { plugins = await discoverPlugins(); } catch {}
+    for (const p of plugins) {
+      if (p.broken || !p.hasMcp) continue;
+      if (!isPluginEnabled(p.name, p, cfg)) continue;
+      const l = live[p.name] || {};
+      out.push({
+        name: p.name, label: p.label, source: "plugin", managed: true, plugin: p.name,
+        transport: "stdio", enabled: true, trust: l.trust || "owner",
+        status: l.status || "not running", error: l.error || null, tools: l.tools || [],
+      });
+    }
+    res.json({ servers: out, botRunning: Object.keys(live).length > 0 });
+  });
+
+  app.put("/api/mcp/servers", requireAuth, requireCsrf, (req, res) => {
+    const list = req.body && req.body.servers;
+    if (!Array.isArray(list)) return res.status(400).json({ error: "servers must be an array" });
+    const clean = [];
+    const seen = new Set();
+    for (const s of list) {
+      if (!s || typeof s !== "object") continue;
+      const name = String(s.name || "").trim();
+      if (!PLUGIN_NAME_RE.test(name)) return res.status(400).json({ error: "server name must be letters/digits/-/_: '" + name + "'" });
+      if (seen.has(name)) return res.status(400).json({ error: "duplicate server name: " + name });
+      seen.add(name);
+      const command = String(s.command || "").trim();
+      if (!command) return res.status(400).json({ error: "server '" + name + "' needs a command" });
+      const args = Array.isArray(s.args) ? s.args.map(String) : [];
+      const env = {};
+      if (s.env && typeof s.env === "object") for (const [k, v] of Object.entries(s.env)) if (k) env[String(k)] = String(v);
+      clean.push({
+        name, transport: "stdio", command, args, env,
+        enabled: s.enabled !== false, trust: ["owner", "elevated", "light"].includes(s.trust) ? s.trust : "owner",
+      });
+    }
+    try {
+      const cfg = io.readConfig();
+      cfg.mcp = cfg.mcp || {};
+      cfg.mcp.servers = clean;
+      io.writeConfig(cfg);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ---- plugins (list + per-plugin enable/config) ----
+  app.get("/api/plugins", requireAuth, async (req, res) => {
+    const cfg = io.readConfig();
+    let plugins = [];
+    try { plugins = await discoverPlugins(); } catch (err) { return res.status(500).json({ error: err.message }); }
+    res.json({
+      plugins: plugins.map((p) => ({
+        name: p.name, label: p.label, description: p.description,
+        hasMcp: !!p.hasMcp, hasRegister: !!p.hasRegister, broken: !!p.broken, error: p.error || null,
+        enabled: isPluginEnabled(p.name, p, cfg), enabledByDefault: !!p.enabledByDefault,
+        configSchema: p.configSchema || [], secretKeys: p.secrets || [],
+        config: (cfg.plugins && cfg.plugins.config && cfg.plugins.config[p.name]) || {},
+        defaults: p.defaults || {},
+      })),
+      secrets: io.secretPresence(),
+    });
+  });
+
+  app.put("/api/plugins/:name", requireAuth, requireCsrf, (req, res) => {
+    const name = req.params.name;
+    if (!PLUGIN_NAME_RE.test(name)) return res.status(400).json({ error: "invalid plugin name" });
+    const body = req.body || {};
+    try {
+      const cfg = io.readConfig();
+      cfg.plugins = cfg.plugins || {};
+      cfg.plugins.config = cfg.plugins.config || {};
+      if (body.config && typeof body.config === "object" && !Array.isArray(body.config)) {
+        cfg.plugins.config[name] = body.config;
+      }
+      if (typeof body.enabled === "boolean") {
+        const en = new Set(Array.isArray(cfg.plugins.enabled) ? cfg.plugins.enabled : []);
+        const dis = new Set(Array.isArray(cfg.plugins.disabled) ? cfg.plugins.disabled : []);
+        if (body.enabled) { en.add(name); dis.delete(name); } else { dis.add(name); en.delete(name); }
+        cfg.plugins.enabled = [...en];
+        cfg.plugins.disabled = [...dis];
+      }
+      io.writeConfig(cfg);
+      res.json({ ok: true });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

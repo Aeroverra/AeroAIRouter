@@ -74,15 +74,6 @@ export const SECTIONS = [
     ],
   },
   {
-    id: "plugins",
-    title: "Plugins",
-    help: "Extend tools & command review.",
-    fields: [
-      { path: "plugins.enabled", label: "Enabled plugins", type: "stringlist" },
-      { path: "plugins.config", label: "Plugin config (JSON)", type: "json", advanced: true },
-    ],
-  },
-  {
     id: "review",
     title: "Command Review",
     help: "Safety policy for the bash tool.",
@@ -90,18 +81,6 @@ export const SECTIONS = [
       { path: "review.policy", label: "Default policy", type: "select", options: ["allow", "deny"], help: "Verdict for non-dangerous commands with no reviewer." },
       { path: "review.allowReviewerOverride", label: "Let reviewers approve dangerous commands", type: "boolean" },
       { path: "review.dangerPatterns", label: "Danger patterns (regex)", type: "stringlist", advanced: true, help: "Leave empty to use built-in defaults." },
-    ],
-  },
-  {
-    id: "integrations",
-    title: "Integrations",
-    help: "Optional service credentials the bot can use. Stored in secrets.env, never in config.json.",
-    fields: [
-      { path: "integrations.github.defaultVisibility", label: "New GitHub repos default to", type: "select", options: ["private", "public"] },
-      { path: "integrations.github.tokens", label: "GitHub tokens", type: "githubtokens", help: "Add one or more (e.g. personal, work). Generate at github.com/settings/tokens." },
-      { path: "integrations.cloudflare.enabled", label: "Enable Cloudflare", type: "boolean" },
-      { secret: "CLOUDFLARE_TOKEN", label: "Cloudflare API token", type: "secret", help: "Create at dash.cloudflare.com → My Profile → API Tokens." },
-      { path: "integrations.cloudflare.accountId", label: "Cloudflare account ID", type: "string", advanced: true },
     ],
   },
   {

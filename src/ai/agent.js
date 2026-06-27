@@ -1,7 +1,7 @@
 import { emoji } from "../persona.js";
 import { getClient, getMetadata, BILLING_SYSTEM_BLOCK, forceRefresh } from "./client.js";
 import { pickModel, isComplex } from "./model-router.js";
-import { toolSchemas, executeTool, setPendingMessage } from "../tools/definitions.js";
+import { toolSchemas, executeTool, setPendingMessage, isExtraTool, getToolTrust } from "../tools/definitions.js";
 import { buildStableSystemPrompt } from "../memory/loader.js";
 import { fetchRecentMessages } from "../discord/history.js";
 import { hasResponded, markResponded } from "../tools/responded-cache.js";
@@ -215,9 +215,16 @@ export function filterToolsForTrust(trust) {
   if (trust === "elevated") {
     // Elevated users get tooling but NOT raw host access: bash/read_file/list_files
     // are owner-only (they could read secrets or run arbitrary commands).
-    return toolSchemas.filter((t) => !["bash", "read_file", "list_files", "write_file", "get_credentials", "spawn_agent", "voice_control", "trust_manage", "cron", "discord_send"].includes(t.name));
+    // Plugin/MCP tools default to owner-only (they hit external services with the
+    // operator's credentials) unless the plugin/server marks them elevated/light.
+    const denied = ["bash", "read_file", "list_files", "write_file", "get_credentials", "spawn_agent", "voice_control", "trust_manage", "cron", "discord_send"];
+    return toolSchemas.filter((t) => {
+      if (isExtraTool(t.name)) return getToolTrust(t.name) === "elevated" || getToolTrust(t.name) === "light";
+      return !denied.includes(t.name);
+    });
   }
-  return toolSchemas.filter((t) => ["read_discord_messages", "voice_speak", "web_search", "web_fetch"].includes(t.name));
+  const light = ["read_discord_messages", "voice_speak", "web_search", "web_fetch"];
+  return toolSchemas.filter((t) => light.includes(t.name) || (isExtraTool(t.name) && getToolTrust(t.name) === "light"));
 }
 
 export function buildMessagesWithAttachments(history, attachments, textContent) {

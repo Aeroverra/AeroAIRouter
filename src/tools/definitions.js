@@ -24,11 +24,15 @@ export function setBlockedChannelId(channelId) {
   _blockedChannelId = channelId;
 }
 
-// Plugin-registered tools. Plugins push their schema into `toolSchemas` (so the
-// model sees them) and register a handler here. Loaded once at startup before any
-// message is handled, keeping the `toolSchemas` reference stable for caching.
+// Plugin- and MCP-registered tools. They push their schema into `toolSchemas`
+// (so the model sees them) and register a handler here. Loaded once at startup
+// before any message is handled, keeping the `toolSchemas` reference stable for
+// caching. `toolTrust` records the minimum trust level required to use each
+// registered tool — these reach external services with the operator's
+// credentials, so they default to owner-only.
 const pluginHandlers = {};
-export function registerTool(schema, handler) {
+const toolTrust = {};
+export function registerTool(schema, handler, opts = {}) {
   if (!schema || !schema.name || typeof handler !== "function") {
     console.error("[tools] registerTool: invalid schema/handler");
     return;
@@ -39,6 +43,15 @@ export function registerTool(schema, handler) {
   }
   toolSchemas.push(schema);
   pluginHandlers[schema.name] = handler;
+  toolTrust[schema.name] = opts.trust || "owner";
+}
+
+// True for tools added at runtime by a plugin or MCP server (not a built-in).
+export function isExtraTool(name) {
+  return Object.prototype.hasOwnProperty.call(pluginHandlers, name);
+}
+export function getToolTrust(name) {
+  return toolTrust[name] || "owner";
 }
 
 export const toolSchemas = [

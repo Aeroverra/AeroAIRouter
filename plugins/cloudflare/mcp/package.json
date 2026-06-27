@@ -1,0 +1,10 @@
+{
+  "name": "aero-cloudflare-mcp",
+  "version": "1.0.0",
+  "description": "Standalone Cloudflare MCP server (stdio). Env-driven; usable in any MCP client.",
+  "type": "module",
+  "bin": { "aero-cloudflare-mcp": "index.js" },
+  "main": "index.js",
+  "license": "MIT",
+  "engines": { "node": ">=20" }
+}

@@ -106,8 +106,10 @@ Set the mode in `config.json` under `ai.auth.mode`:
 | `persona.emoji` | Optional signature emoji injected into replies. |
 | `features.voice` | Enable the voice feature (needs whisper + edge-tts). |
 | `voice.*` | Voice channel id and paths to the whisper python + edge-tts. |
-| `plugins.enabled` | List of plugin names to load. |
+| `plugins.enabled` | Plugin names to force on (on top of those enabled by default). |
+| `plugins.disabled` | Plugin names to force off (overrides defaults). |
 | `plugins.config` | Per-plugin config, keyed by plugin name. |
+| `mcp.servers` | Your own MCP servers: `[{ name, command, args, env, enabled, trust }]` (stdio). |
 | `review.policy` | `allow` / `deny` — default verdict for non-dangerous commands when no reviewer opines. |
 | `review.dangerPatterns` | Regex strings forming the safety floor (denied by default). |
 | `review.allowReviewerOverride` | If `true`, a reviewer (e.g. Gemini) may approve a danger-matched command. Default `false` (danger patterns are a hard deny). |
@@ -118,21 +120,51 @@ Secrets are **only** read from the environment / `secrets.env`, never from
 
 ## Plugins
 
-Enable by name in `config.plugins.enabled`. Plugins are resolved from
-`AIROUTER_HOME/plugins/<name>/index.js` (user) or `./plugins/<name>/index.js`
-(built-in). Each exports `register(api)`:
+A plugin is a folder at `AIROUTER_HOME/plugins/<name>/` (user) or
+`./plugins/<name>/` (built-in) with an `index.js`. Manage them from the **Plugins**
+tab in the UI (toggle + per-plugin config), or via
+`config.plugins.{enabled,disabled,config}`. A plugin can do either or both of:
 
-```js
-export function register(api) {
-  api.registerTool(schema, (input, ctx) => { /* ... */ });   // add a model tool
-  api.registerCommandReviewer((command) => { /* ... */ });   // vet bash commands
-  // api.config, api.log, api.pluginConfig(name), api.isDangerousCommand also available
-}
-```
+1. **In-process hooks** — `register(api)` to add model tools and bash-command
+   reviewers:
 
-See **`plugins/example-plugin/`** for a working template (registers a tool and a
-command reviewer). A built-in safety floor (`review.dangerPatterns`) denies
-destructive commands even when no plugin is loaded.
+   ```js
+   export function register(api) {
+     api.registerTool(schema, (input, ctx) => { /* ... */ }, { trust: "owner" });
+     api.registerCommandReviewer((command) => { /* ... */ });
+     // api.config, api.log, api.pluginConfig(name), api.isDangerousCommand also available
+   }
+   ```
+
+2. **An MCP server** — `mcp(ctx)` returns a launch spec for a bundled or external
+   [Model Context Protocol](https://modelcontextprotocol.io) server; its tools are
+   merged into the bot. The plugin owns the UI config (`configSchema`) and projects
+   secrets into the server's env; the server itself reads only env vars, so it also
+   runs standalone in any MCP client.
+
+A plugin also exports `meta`, `enabledByDefault`, `secrets`, `defaults`, and
+`configSchema` (the fields shown in its UI panel). Tools registered by plugins/MCP
+default to **owner-only** trust.
+
+Bundled plugins: **`github`** and **`cloudflare`** (each wraps a self-contained
+MCP server under `plugins/<name>/mcp/`, on by default), and
+**`example-plugin`** (a template). A built-in safety floor
+(`review.dangerPatterns`) denies destructive bash commands even when no plugin is
+loaded.
+
+## MCP servers
+
+The bot is an MCP **client**. Tools come from two places, both shown under the
+**MCP** tab:
+
+- **Plugin-provided** servers (e.g. `github`, `cloudflare`) — managed by their
+  plugin; configure them under Plugins.
+- **Your own** servers — add any stdio MCP server in `config.mcp.servers` (or the
+  MCP tab): `{ name, command, args, env, enabled, trust }`. An env value of
+  `${SECRET_NAME}` is resolved from `secrets.env`/the environment at launch, so
+  you don't have to store tokens in `config.json`.
+
+Changes to MCP/plugin wiring apply on the next bot restart.
 
 ## Auto-update
 

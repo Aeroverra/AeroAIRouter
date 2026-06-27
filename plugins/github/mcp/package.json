@@ -1,0 +1,10 @@
+{
+  "name": "aero-github-mcp",
+  "version": "1.0.0",
+  "description": "Standalone GitHub MCP server (stdio). Env-driven; usable in any MCP client.",
+  "type": "module",
+  "bin": { "aero-github-mcp": "index.js" },
+  "main": "index.js",
+  "license": "MIT",
+  "engines": { "node": ">=20" }
+}

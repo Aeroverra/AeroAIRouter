@@ -391,7 +391,7 @@ function renderDash() {
     nav.appendChild(b);
   }
   // extra virtual sections
-  for (const extra of [{ id: "__access", title: "Access & URLs" }, { id: "__raw", title: "Raw JSON" }]) {
+  for (const extra of [{ id: "__plugins", title: "Plugins" }, { id: "__mcp", title: "MCP" }, { id: "__access", title: "Access & URLs" }, { id: "__raw", title: "Raw JSON" }]) {
     const b = el("button", { text: extra.title, class: extra.id === state.active ? "active" : "" });
     b.addEventListener("click", () => { if (confirmLeave()) { state.active = extra.id; renderDash(); } });
     nav.appendChild(b);
@@ -412,6 +412,8 @@ function renderContent() {
   const c = $("[data-content]");
   if (!c) return;
   c.innerHTML = "";
+  if (state.active === "__plugins") return renderPlugins(c);
+  if (state.active === "__mcp") return renderMcp(c);
   if (state.active === "__access") return renderAccess(c);
   if (state.active === "__raw") return renderRaw(c);
   const sec = state.schema.find((s) => s.id === state.active);
@@ -797,6 +799,242 @@ function renderChannels(wrap, f, val) {
   draw();
   load(false); // auto-load on open
   return wrap;
+}
+
+// ---------- plugins ----------
+function statusBadge(status, error) {
+  const cls = status === "connected" ? "badge set" : (status === "error" ? "badge bad" : "badge");
+  const b = el("span", { class: cls, text: status });
+  if (error) b.title = error;
+  return b;
+}
+
+function renderPlugins(c) {
+  c.appendChild(el("h2", { text: "Plugins" }));
+  c.appendChild(el("p", { class: "section-help", text: "Plugins add tools and integrations. Each can be turned on/off and configured here. Some plugins run a bundled MCP server (shown under the MCP tab). Restart the bot to apply changes." }));
+  const host = el("div");
+  c.appendChild(host);
+  host.appendChild(el("p", { class: "hint", text: "Loading plugins…" }));
+
+  api("GET", "/api/plugins").then((data) => {
+    host.innerHTML = "";
+    const secrets = data.secrets || {};
+    for (const p of data.plugins || []) {
+      host.appendChild(pluginCard(p, secrets));
+    }
+    if (!(data.plugins || []).length) host.appendChild(el("p", { class: "hint", text: "No plugins found." }));
+  }).catch((ex) => { host.innerHTML = ""; host.appendChild(el("p", { class: "err", text: ex.message })); });
+}
+
+function pluginCard(p, secrets) {
+  const card = el("div", { class: "plugin-card" });
+  const conf = Object.assign({}, p.defaults || {}, p.config || {});
+  const secretEdits = {};
+
+  // header: title + enable toggle
+  const enableCb = el("input", { type: "checkbox" }); enableCb.checked = !!p.enabled; enableCb.style.width = "auto";
+  const head = el("div", { class: "plugin-head" }, [
+    el("div", {}, [
+      el("strong", { text: p.label || p.name }),
+      p.hasMcp ? el("span", { class: "badge", text: "MCP" }) : null,
+      p.broken ? el("span", { class: "badge bad", text: "error" }) : null,
+    ]),
+    el("label", { class: "switch" }, [enableCb, " enabled"]),
+  ]);
+  card.appendChild(head);
+  if (p.description) card.appendChild(el("p", { class: "hint", text: p.description }));
+  if (p.broken) card.appendChild(el("p", { class: "err", text: p.error || "failed to load" }));
+
+  // config fields
+  for (const f of p.configSchema || []) {
+    card.appendChild(pluginField(f, conf, secrets, secretEdits));
+  }
+
+  // save
+  const saveBtn = el("button", { text: "Save" });
+  const status = el("span", { class: "hint" });
+  saveBtn.addEventListener("click", async () => {
+    saveBtn.disabled = true; status.textContent = "Saving…";
+    try {
+      await api("PUT", "/api/plugins/" + p.name, { enabled: enableCb.checked, config: conf });
+      const sec = {};
+      for (const [k, v] of Object.entries(secretEdits)) { if (v === null) sec[k] = null; else if (v && v.trim()) sec[k] = v.trim(); }
+      if (Object.keys(sec).length) await api("PUT", "/api/secrets", { secrets: sec });
+      status.textContent = ""; toast("Saved " + (p.label || p.name) + ". Restart the bot to apply.");
+    } catch (ex) { status.textContent = ""; toast(ex.message, true); }
+    saveBtn.disabled = false;
+  });
+  card.appendChild(el("div", { class: "row" }, [saveBtn, status]));
+  return card;
+}
+
+function pluginField(f, conf, secrets, secretEdits) {
+  const wrap = el("div", { class: "field" });
+  wrap.appendChild(el("label", { text: f.label }));
+  if (f.help) wrap.appendChild(el("span", { class: "hint", text: f.help }));
+
+  if (f.secret) {
+    const isSet = !!secrets[f.secret];
+    const badge = el("span", { class: "badge" + (isSet ? " set" : ""), text: isSet ? "set" : "not set" });
+    const i = el("input", { type: "password", placeholder: isSet ? "•••••• (leave blank to keep)" : "not set" });
+    i.addEventListener("input", () => { secretEdits[f.secret] = i.value; });
+    wrap.appendChild(el("div", { class: "row" }, [i, badge]));
+    return wrap;
+  }
+  const val = conf[f.path];
+  if (f.type === "boolean") {
+    const cb = el("input", { type: "checkbox" }); cb.checked = !!val; cb.style.width = "auto";
+    cb.addEventListener("change", () => { conf[f.path] = cb.checked; });
+    wrap.appendChild(el("label", { class: "switch" }, [cb, " enabled"]));
+  } else if (f.type === "select") {
+    const s = el("select");
+    for (const o of f.options) s.appendChild(el("option", { value: o, text: o }));
+    s.value = val == null ? f.options[0] : val;
+    s.addEventListener("change", () => { conf[f.path] = s.value; });
+    wrap.appendChild(s);
+  } else if (f.type === "number") {
+    const i = el("input", { type: "text", value: val == null ? "" : String(val) });
+    i.addEventListener("input", () => { const n = Number(i.value); conf[f.path] = i.value === "" ? undefined : (isNaN(n) ? i.value : n); });
+    wrap.appendChild(i);
+  } else {
+    const i = el("input", { type: "text", value: val == null ? "" : String(val) });
+    i.addEventListener("input", () => { conf[f.path] = i.value; });
+    wrap.appendChild(i);
+  }
+  return wrap;
+}
+
+// ---------- MCP servers ----------
+function renderMcp(c) {
+  c.appendChild(el("h2", { text: "MCP Servers" }));
+  c.appendChild(el("p", { class: "section-help", text: "Model Context Protocol servers expose external tools to the bot. Plugin-provided servers are managed by their plugin; you can also add your own. Changes apply on the next bot restart." }));
+  const host = el("div");
+  c.appendChild(host);
+  host.appendChild(el("p", { class: "hint", text: "Loading…" }));
+
+  api("GET", "/api/mcp").then((data) => {
+    host.innerHTML = "";
+    const servers = data.servers || [];
+    if (!data.botRunning) host.appendChild(el("p", { class: "hint", text: "Live status/tools appear once the bot has started with these settings." }));
+
+    // managed (plugin) servers — read-only
+    const managed = servers.filter((s) => s.managed);
+    host.appendChild(el("h3", { text: "From plugins (managed)" }));
+    if (!managed.length) host.appendChild(el("p", { class: "hint", text: "No plugin is running an MCP server. Enable one under Plugins." }));
+    for (const s of managed) host.appendChild(mcpServerView(s, true));
+
+    // direct servers — editable
+    host.appendChild(el("h3", { text: "Your servers" }));
+    const direct = servers.filter((s) => !s.managed).map(cloneServer);
+    const listBox = el("div");
+    host.appendChild(listBox);
+
+    function draw() {
+      listBox.innerHTML = "";
+      direct.forEach((s, idx) => listBox.appendChild(mcpServerEditor(s, () => { direct.splice(idx, 1); draw(); })));
+      if (!direct.length) listBox.appendChild(el("p", { class: "hint", text: "No custom MCP servers yet." }));
+    }
+    draw();
+
+    const addBtn = el("button", { class: "ghost", text: "+ Add MCP server" });
+    addBtn.addEventListener("click", () => { direct.push({ name: "", command: "", args: [], env: {}, enabled: true, trust: "owner" }); draw(); });
+    const saveBtn = el("button", { text: "Save servers" });
+    saveBtn.addEventListener("click", async () => {
+      try {
+        const payload = direct.map((s) => ({
+          name: (s.name || "").trim(), command: (s.command || "").trim(),
+          args: s._argsText != null ? s._argsText.split("\n").map((x) => x.trim()).filter(Boolean) : (s.args || []),
+          env: s._envText != null ? parseEnvLines(s._envText) : (s.env || {}),
+          enabled: s.enabled !== false, trust: s.trust || "owner",
+        }));
+        await api("PUT", "/api/mcp/servers", { servers: payload });
+        toast("Saved. Restart the bot to apply.");
+      } catch (ex) { toast(ex.message, true); }
+    });
+    host.appendChild(el("div", { class: "row" }, [addBtn, saveBtn]));
+  }).catch((ex) => { host.innerHTML = ""; host.appendChild(el("p", { class: "err", text: ex.message })); });
+}
+
+function cloneServer(s) {
+  return {
+    name: s.name, command: s.command || "", args: (s.args || []).slice(), env: Object.assign({}, s.env || {}),
+    enabled: s.enabled !== false, trust: s.trust || "owner",
+    _argsText: (s.args || []).join("\n"), _envText: envToLines(s.env || {}),
+  };
+}
+function envToLines(env) { return Object.entries(env).map(([k, v]) => k + "=" + v).join("\n"); }
+function parseEnvLines(text) {
+  const out = {};
+  for (const line of text.split("\n")) {
+    const t = line.trim(); if (!t) continue;
+    const eq = t.indexOf("="); if (eq < 1) continue;
+    out[t.slice(0, eq).trim()] = t.slice(eq + 1).trim();
+  }
+  return out;
+}
+
+function toolsList(s) {
+  const box = el("div", { class: "mcp-tools" });
+  if (!s.tools || !s.tools.length) { box.appendChild(el("span", { class: "hint", text: s.status === "connected" ? "(no tools)" : "tools listed once running" })); return box; }
+  for (const t of s.tools) box.appendChild(el("div", { class: "hint" }, [el("code", { text: t.registeredName || t.name }), t.description ? (" — " + t.description) : ""]));
+  return box;
+}
+
+function mcpServerView(s, managed) {
+  const card = el("div", { class: "plugin-card" });
+  card.appendChild(el("div", { class: "plugin-head" }, [
+    el("div", {}, [el("strong", { text: s.label || s.name }), statusBadge(s.status, s.error)]),
+    managed ? el("span", { class: "hint", text: "managed by the " + s.plugin + " plugin" }) : null,
+  ]));
+  if (s.error) card.appendChild(el("p", { class: "err", text: s.error }));
+  if (managed) card.appendChild(el("p", { class: "hint", text: "Configure it under the Plugins tab." }));
+  card.appendChild(toolsList(s));
+  return card;
+}
+
+function mcpServerEditor(s, onRemove) {
+  const card = el("div", { class: "plugin-card" });
+  const name = el("input", { type: "text", value: s.name || "", placeholder: "name (letters/digits/-/_)" });
+  name.addEventListener("input", () => { s.name = name.value; });
+  const rm = el("button", { class: "ghost", text: "✕" });
+  rm.addEventListener("click", onRemove);
+  card.appendChild(el("div", { class: "plugin-head" }, [
+    el("div", { class: "row" }, [name, statusBadge(s.status || "new", s.error)]), rm,
+  ]));
+
+  const cmd = el("input", { type: "text", value: s.command || "", placeholder: "command, e.g. npx or node" });
+  cmd.addEventListener("input", () => { s.command = cmd.value; });
+  card.appendChild(field2("Command", cmd, "The executable to launch (stdio MCP server)."));
+
+  const args = el("textarea", { placeholder: "one argument per line\ne.g. -y\n@modelcontextprotocol/server-filesystem" });
+  args.value = s._argsText != null ? s._argsText : (s.args || []).join("\n");
+  args.style.minHeight = "70px";
+  args.addEventListener("input", () => { s._argsText = args.value; });
+  card.appendChild(field2("Arguments", args, "One per line."));
+
+  const env = el("textarea", { placeholder: "KEY=value, one per line\nuse KEY=${SECRET_NAME} to pull from secrets.env" });
+  env.value = s._envText != null ? s._envText : envToLines(s.env || {});
+  env.style.minHeight = "60px";
+  env.addEventListener("input", () => { s._envText = env.value; });
+  card.appendChild(field2("Environment", env, "KEY=value per line. Reference a secret without storing it here: KEY=${MY_SECRET}."));
+
+  const enabledCb = el("input", { type: "checkbox" }); enabledCb.checked = s.enabled !== false; enabledCb.style.width = "auto";
+  enabledCb.addEventListener("change", () => { s.enabled = enabledCb.checked; });
+  const trust = el("select");
+  ["owner", "elevated", "light"].forEach((t) => trust.appendChild(el("option", { value: t, text: "trust: " + t })));
+  trust.value = s.trust || "owner";
+  trust.addEventListener("change", () => { s.trust = trust.value; });
+  card.appendChild(el("div", { class: "row" }, [el("label", { class: "switch" }, [enabledCb, " enabled"]), trust]));
+  if (s.tools && s.tools.length) card.appendChild(toolsList(s));
+  return card;
+}
+
+function field2(labelText, inputEl, help) {
+  const w = el("div", { class: "field" });
+  w.appendChild(el("label", { text: labelText }));
+  if (help) w.appendChild(el("span", { class: "hint", text: help }));
+  w.appendChild(inputEl);
+  return w;
 }
 
 // ---------- virtual sections ----------

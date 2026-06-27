@@ -57,7 +57,8 @@ const defaults = {
     maxHistoryPerChannel: 100,
   },
   persona: { emoji: "" },
-  plugins: { enabled: [], config: {} },
+  plugins: { enabled: [], disabled: [], config: {} },
+  mcp: { servers: [] }, // direct MCP servers: [{ name, transport, command, args, env, enabled, trust }]
   review: { policy: "allow", dangerPatterns: [], allowReviewerOverride: false },
   features: { voice: false },
   voice: { channelId: "", whisperPath: "", edgeTtsPath: "", ttsCacheDir: "/tmp/aeroairouter-tts" },
@@ -157,6 +158,7 @@ const config = {
   braveApiKey: secrets.braveApiKey,
   persona: merged.persona,
   plugins: merged.plugins,
+  mcp: merged.mcp,
   review: merged.review,
   features: merged.features,
   voice: merged.voice,
