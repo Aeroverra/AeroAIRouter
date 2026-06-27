@@ -30,7 +30,18 @@ export function allowSecretKeys(keys) {
 }
 
 function isAllowedSecretKey(k) {
-  return SECRET_KEYS.includes(k) || GITHUB_KEY_RE.test(k) || extraSecretKeys.has(k);
+  if (typeof k !== "string" || !/^[A-Z][A-Z0-9_]*$/.test(k)) return false;
+  if (SECRET_KEYS.includes(k) || extraSecretKeys.has(k) || GITHUB_KEY_RE.test(k)) return true;
+  // Multi-token: allow "<base>_<SUFFIX>" for any allowed base key.
+  for (const base of [...SECRET_KEYS, ...extraSecretKeys]) {
+    if (k === base || k.startsWith(base + "_")) return true;
+  }
+  return false;
+}
+
+// Whether the UI may reveal this stored secret's value to an authenticated admin.
+export function isRevealableKey(k) {
+  return isAllowedSecretKey(k);
 }
 
 export const PERSONA_FILES = ["soul.md", "heartbeat.md", "memory.md"];
@@ -92,7 +103,8 @@ export function secretPresence() {
   const out = {};
   for (const k of SECRET_KEYS) out[k] = !!(process.env[k] || map[k]);
   for (const k of extraSecretKeys) out[k] = !!(process.env[k] || map[k]);
-  for (const k of Object.keys(map)) if (GITHUB_KEY_RE.test(k)) out[k] = !!map[k];
+  // Any stored secret matching an allowed key/prefix (covers plugin multi-tokens).
+  for (const k of Object.keys(map)) if (isAllowedSecretKey(k)) out[k] = !!map[k];
   for (const k of Object.keys(process.env)) if (GITHUB_KEY_RE.test(k)) out[k] = true;
   return out;
 }

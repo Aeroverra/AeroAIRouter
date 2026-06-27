@@ -97,6 +97,8 @@ button.danger { background: var(--danger); }
 }
 .sidebar button:hover { background: var(--panel2); }
 .sidebar button.active { background: var(--accent); color: white; }
+.sidebar button.subnav { padding-left: 22px; font-weight: 500; font-size: 13px; color: var(--muted); }
+.sidebar button.subnav.active { color: white; }
 .content { padding: 22px 26px 90px; max-width: 820px; }
 .content h2 { margin: 0 0 2px; }
 .section-help { color: var(--muted); margin: 0 0 18px; }

@@ -365,6 +365,8 @@ async function openDash() {
   state.personaEdits = {};
   state.dirty = false;
   if (!state.csrf) { const c = await api("GET", "/api/csrf"); state.csrf = c.csrf; }
+  try { const pd = await api("GET", "/api/plugins"); state.pluginList = pd.plugins || []; state.pluginSecrets = pd.secrets || {}; }
+  catch { state.pluginList = []; state.pluginSecrets = {}; }
   state.active = state.active || (state.schema[0] && state.schema[0].id);
   renderDash();
   refreshBotStatus();
@@ -385,17 +387,23 @@ function renderDash() {
 
   // sidebar
   const nav = $("[data-nav]", frag);
-  for (const sec of state.schema) {
-    const b = el("button", { text: sec.title, class: sec.id === state.active ? "active" : "" });
-    b.addEventListener("click", () => { if (confirmLeave()) { state.active = sec.id; renderDash(); } });
+  const addNav = (id, title, opts = {}) => {
+    const b = el("button", { text: title, class: (id === state.active ? "active " : "") + (opts.child ? "subnav" : "") });
+    b.addEventListener("click", () => { if (confirmLeave()) { state.active = id; renderDash(); } });
     nav.appendChild(b);
+  };
+  for (const sec of state.schema) addNav(sec.id, sec.title);
+  // Plugins (expands into per-plugin config sub-tabs when active)
+  addNav("__plugins", "Plugins");
+  const onPlugins = state.active === "__plugins" || (state.active || "").startsWith("__plugin:");
+  if (onPlugins) {
+    for (const p of state.pluginList || []) {
+      if (!(p.configSchema || []).length) continue;
+      addNav("__plugin:" + p.name, "› " + (p.label || p.name), { child: true });
+    }
   }
-  // extra virtual sections
-  for (const extra of [{ id: "__plugins", title: "Plugins" }, { id: "__mcp", title: "MCP" }, { id: "__access", title: "Access & URLs" }, { id: "__raw", title: "Raw JSON" }]) {
-    const b = el("button", { text: extra.title, class: extra.id === state.active ? "active" : "" });
-    b.addEventListener("click", () => { if (confirmLeave()) { state.active = extra.id; renderDash(); } });
-    nav.appendChild(b);
-  }
+  addNav("__mcp", "MCP");
+  addNav("__raw", "Raw JSON");
 
   mount(frag);
   renderContent();
@@ -412,9 +420,9 @@ function renderContent() {
   const c = $("[data-content]");
   if (!c) return;
   c.innerHTML = "";
-  if (state.active === "__plugins") return renderPlugins(c);
+  if (state.active === "__plugins") return renderPluginsList(c);
+  if ((state.active || "").startsWith("__plugin:")) return renderPluginConfig(c, state.active.slice("__plugin:".length));
   if (state.active === "__mcp") return renderMcp(c);
-  if (state.active === "__access") return renderAccess(c);
   if (state.active === "__raw") return renderRaw(c);
   const sec = state.schema.find((s) => s.id === state.active);
   if (!sec) return;
@@ -429,6 +437,9 @@ function renderContent() {
     const btn = el("button", { text: "Apply network changes (restart UI)" });
     btn.addEventListener("click", restartUi);
     c.appendChild(btn);
+    c.appendChild(el("h3", { text: "Access & URLs" }));
+    c.appendChild(el("p", { class: "section-help", text: "The UI is reachable at these addresses (LAN + Tailscale)." }));
+    appendAccessUrls(c);
   }
 }
 
@@ -503,12 +514,31 @@ function renderField(f) {
   return wrap;
 }
 
+// Eye toggle that fetches and shows a stored secret value (admin-only). Setting
+// the value programmatically does NOT fire 'input', so a reveal alone never marks
+// the field dirty or overwrites the stored secret on save.
+function revealBtn(input, getKey) {
+  let shown = false;
+  const b = el("button", { type: "button", class: "ghost reveal", text: "👁" });
+  b.title = "Show / hide the stored value";
+  b.addEventListener("click", async () => {
+    const key = typeof getKey === "function" ? getKey() : getKey;
+    if (!key) return;
+    if (shown) { input.type = "password"; input.value = ""; shown = false; b.textContent = "👁"; return; }
+    try {
+      const r = await api("POST", "/api/secrets/reveal", { key });
+      input.value = r.value; input.type = "text"; shown = true; b.textContent = "🙈";
+    } catch (ex) { toast(ex.message, true); }
+  });
+  return b;
+}
+
 function renderSecret(wrap, f) {
   const isSet = !!state.secrets[f.secret];
   const badge = el("span", { class: "badge" + (isSet ? " set" : ""), text: isSet ? "set" : "not set" });
   const i = el("input", { type: "password", placeholder: isSet ? "•••••• (leave blank to keep)" : "not set" });
   i.addEventListener("input", () => { state.secretEdits[f.secret] = i.value; markDirty(); });
-  const row = el("div", { class: "row" }, [i, badge]);
+  const row = el("div", { class: "row" }, [i, isSet ? revealBtn(i, f.secret) : null, badge]);
   wrap.appendChild(row);
   return wrap;
 }
@@ -809,48 +839,59 @@ function statusBadge(status, error) {
   return b;
 }
 
-function renderPlugins(c) {
+function renderPluginsList(c) {
   c.appendChild(el("h2", { text: "Plugins" }));
-  c.appendChild(el("p", { class: "section-help", text: "Plugins add tools and integrations. Each can be turned on/off and configured here. Some plugins run a bundled MCP server (shown under the MCP tab). Restart the bot to apply changes." }));
-  const host = el("div");
-  c.appendChild(host);
-  host.appendChild(el("p", { class: "hint", text: "Loading plugins…" }));
+  c.appendChild(el("p", { class: "section-help", text: "Turn plugins on or off, or open one to configure it. Configurable plugins also appear in the menu on the left. Restart the bot to apply changes." }));
+  const list = state.pluginList || [];
+  if (!list.length) { c.appendChild(el("p", { class: "hint", text: "No plugins found." })); return; }
 
-  api("GET", "/api/plugins").then((data) => {
-    host.innerHTML = "";
-    const secrets = data.secrets || {};
-    for (const p of data.plugins || []) {
-      host.appendChild(pluginCard(p, secrets));
+  for (const p of list) {
+    const card = el("div", { class: "plugin-card" });
+    const cb = el("input", { type: "checkbox" }); cb.checked = !!p.enabled; cb.style.width = "auto";
+    cb.addEventListener("change", async () => {
+      try { await api("PUT", "/api/plugins/" + p.name, { enabled: cb.checked }); p.enabled = cb.checked; toast((cb.checked ? "Enabled " : "Disabled ") + (p.label || p.name) + ". Restart the bot to apply."); }
+      catch (ex) { cb.checked = !cb.checked; toast(ex.message, true); }
+    });
+    card.appendChild(el("div", { class: "plugin-head" }, [
+      el("div", {}, [
+        el("strong", { text: p.label || p.name }),
+        p.hasMcp ? el("span", { class: "badge", text: "MCP" }) : null,
+        p.broken ? el("span", { class: "badge bad", text: "error" }) : null,
+      ]),
+      el("label", { class: "switch" }, [cb, " enabled"]),
+    ]));
+    if (p.description) card.appendChild(el("p", { class: "hint", text: p.description }));
+    if (p.broken) card.appendChild(el("p", { class: "err", text: p.error || "failed to load" }));
+    if ((p.configSchema || []).length) {
+      const cfgBtn = el("button", { class: "ghost", text: "Configure →" });
+      cfgBtn.addEventListener("click", () => { if (confirmLeave()) { state.active = "__plugin:" + p.name; renderDash(); } });
+      card.appendChild(el("div", { class: "row" }, [cfgBtn]));
+    } else {
+      card.appendChild(el("p", { class: "hint", text: "No configurable options." }));
     }
-    if (!(data.plugins || []).length) host.appendChild(el("p", { class: "hint", text: "No plugins found." }));
-  }).catch((ex) => { host.innerHTML = ""; host.appendChild(el("p", { class: "err", text: ex.message })); });
+    c.appendChild(card);
+  }
 }
 
-function pluginCard(p, secrets) {
-  const card = el("div", { class: "plugin-card" });
+function renderPluginConfig(c, name) {
+  const p = (state.pluginList || []).find((x) => x.name === name);
+  const back = el("button", { class: "ghost", text: "← All plugins" });
+  back.addEventListener("click", () => { if (confirmLeave()) { state.active = "__plugins"; renderDash(); } });
+  c.appendChild(back);
+  if (!p) { c.appendChild(el("p", { class: "err", text: "Plugin not found." })); return; }
+  c.appendChild(el("h2", { text: p.label || p.name }));
+  if (p.description) c.appendChild(el("p", { class: "section-help", text: p.description }));
+  if (p.broken) { c.appendChild(el("p", { class: "err", text: p.error || "failed to load" })); return; }
+
   const conf = Object.assign({}, p.defaults || {}, p.config || {});
   const secretEdits = {};
+  const secrets = state.pluginSecrets || {};
 
-  // header: title + enable toggle
   const enableCb = el("input", { type: "checkbox" }); enableCb.checked = !!p.enabled; enableCb.style.width = "auto";
-  const head = el("div", { class: "plugin-head" }, [
-    el("div", {}, [
-      el("strong", { text: p.label || p.name }),
-      p.hasMcp ? el("span", { class: "badge", text: "MCP" }) : null,
-      p.broken ? el("span", { class: "badge bad", text: "error" }) : null,
-    ]),
-    el("label", { class: "switch" }, [enableCb, " enabled"]),
-  ]);
-  card.appendChild(head);
-  if (p.description) card.appendChild(el("p", { class: "hint", text: p.description }));
-  if (p.broken) card.appendChild(el("p", { class: "err", text: p.error || "failed to load" }));
+  c.appendChild(el("div", { class: "field" }, [el("label", { class: "switch" }, [enableCb, " plugin enabled"])]));
 
-  // config fields
-  for (const f of p.configSchema || []) {
-    card.appendChild(pluginField(f, conf, secrets, secretEdits));
-  }
+  for (const f of p.configSchema || []) c.appendChild(pluginField(f, conf, secrets, secretEdits, p.name));
 
-  // save
   const saveBtn = el("button", { text: "Save" });
   const status = el("span", { class: "hint" });
   saveBtn.addEventListener("click", async () => {
@@ -859,26 +900,31 @@ function pluginCard(p, secrets) {
       await api("PUT", "/api/plugins/" + p.name, { enabled: enableCb.checked, config: conf });
       const sec = {};
       for (const [k, v] of Object.entries(secretEdits)) { if (v === null) sec[k] = null; else if (v && v.trim()) sec[k] = v.trim(); }
-      if (Object.keys(sec).length) await api("PUT", "/api/secrets", { secrets: sec });
+      if (Object.keys(sec).length) {
+        await api("PUT", "/api/secrets", { secrets: sec });
+        for (const k of Object.keys(sec)) secrets[k] = sec[k] !== null;
+      }
+      p.enabled = enableCb.checked; p.config = conf;
       status.textContent = ""; toast("Saved " + (p.label || p.name) + ". Restart the bot to apply.");
     } catch (ex) { status.textContent = ""; toast(ex.message, true); }
     saveBtn.disabled = false;
   });
-  card.appendChild(el("div", { class: "row" }, [saveBtn, status]));
-  return card;
+  c.appendChild(el("div", { class: "row" }, [saveBtn, status]));
 }
 
-function pluginField(f, conf, secrets, secretEdits) {
+function pluginField(f, conf, secrets, secretEdits, pluginName) {
   const wrap = el("div", { class: "field" });
   wrap.appendChild(el("label", { text: f.label }));
   if (f.help) wrap.appendChild(el("span", { class: "hint", text: f.help }));
+
+  if (f.type === "tokens") return pluginTokensField(wrap, f, conf, secrets, secretEdits, pluginName);
 
   if (f.secret) {
     const isSet = !!secrets[f.secret];
     const badge = el("span", { class: "badge" + (isSet ? " set" : ""), text: isSet ? "set" : "not set" });
     const i = el("input", { type: "password", placeholder: isSet ? "•••••• (leave blank to keep)" : "not set" });
     i.addEventListener("input", () => { secretEdits[f.secret] = i.value; });
-    wrap.appendChild(el("div", { class: "row" }, [i, badge]));
+    wrap.appendChild(el("div", { class: "row" }, [i, isSet ? revealBtn(i, f.secret) : null, badge]));
     return wrap;
   }
   const val = conf[f.path];
@@ -901,6 +947,65 @@ function pluginField(f, conf, secrets, secretEdits) {
     i.addEventListener("input", () => { conf[f.path] = i.value; });
     wrap.appendChild(i);
   }
+  return wrap;
+}
+
+// Multi-token field: a list of {label, key} with per-token value entry, reveal,
+// and a Check button that asks the plugin to report the token's scopes.
+function pluginTokensField(wrap, f, conf, secrets, secretEdits, pluginName) {
+  const prefix = f.keyPrefix || "TOKEN";
+  const rows = Array.isArray(conf[f.path]) ? conf[f.path].map((t) => Object.assign({}, t)) : [];
+  if (!rows.length) rows.push({ label: "default", key: prefix });
+  const box = el("div");
+  wrap.appendChild(box);
+
+  function ensureKey(r, idx) {
+    if (r.key) return;
+    if (idx === 0) { r.key = prefix; return; }
+    const slug = (r.label || "").toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    r.key = prefix + "_" + (slug || (idx + 1));
+  }
+  function commit() {
+    conf[f.path] = rows.filter((r) => r.key).map((r) => ({ label: r.label || r.key, key: r.key }));
+  }
+  async function check(r, typed, out) {
+    out.textContent = "Checking…"; out.className = "hint";
+    try {
+      const body = typed && typed.trim() ? { token: typed.trim() } : { key: r.key };
+      const res = await api("POST", "/api/plugins/" + pluginName + "/check-token", body);
+      if (!res.ok) { out.textContent = "✗ " + (res.error || "invalid"); out.className = "check bad"; return; }
+      const scopes = (res.scopes && res.scopes.length) ? res.scopes.join(", ") : (res.note || "no scopes reported");
+      out.innerHTML = "";
+      out.appendChild(el("span", { class: "check ok", text: "✓ " + (res.identity || "valid") }));
+      out.appendChild(el("div", { class: "hint", text: "scopes: " + scopes }));
+    } catch (ex) { out.textContent = "✗ " + ex.message; out.className = "check bad"; }
+  }
+
+  function draw() {
+    box.innerHTML = "";
+    rows.forEach((r, idx) => {
+      ensureKey(r, idx);
+      const label = el("input", { type: "text", value: r.label || "", placeholder: "label (e.g. read-only)" });
+      label.addEventListener("input", () => { r.label = label.value; commit(); });
+      const isSet = !!secrets[r.key];
+      const tok = el("input", { type: "password", placeholder: isSet ? "•••••• (leave blank to keep)" : "paste token" });
+      tok.addEventListener("input", () => { secretEdits[r.key] = tok.value; });
+      const out = el("div", { class: "hint" });
+      const checkBtn = el("button", { type: "button", class: "ghost", text: "Check" });
+      checkBtn.addEventListener("click", () => check(r, tok.value, out));
+      const rm = el("button", { type: "button", class: "ghost", text: "✕" });
+      rm.addEventListener("click", () => { secretEdits[r.key] = null; rows.splice(idx, 1); draw(); commit(); });
+      const controls = [label, tok, isSet ? revealBtn(tok, r.key) : null, checkBtn, rm].filter(Boolean);
+      box.appendChild(el("div", { class: "list-row" }, controls));
+      box.appendChild(el("div", { class: "hint", text: "env var: " + r.key }));
+      box.appendChild(out);
+    });
+    const add = el("button", { type: "button", class: "ghost", text: "+ Add token" });
+    add.addEventListener("click", () => { rows.push({ label: "", key: "" }); draw(); commit(); });
+    box.appendChild(add);
+  }
+  draw();
+  commit();
   return wrap;
 }
 
@@ -1038,9 +1143,7 @@ function field2(labelText, inputEl, help) {
 }
 
 // ---------- virtual sections ----------
-function renderAccess(c) {
-  c.appendChild(el("h2", { text: "Access & URLs" }));
-  c.appendChild(el("p", { class: "section-help", text: "The UI is reachable at these addresses (LAN + Tailscale)." }));
+function appendAccessUrls(c) {
   const ul = el("ul", { class: "url-list" });
   c.appendChild(ul);
   api("GET", "/api/netinfo").then((r) => {

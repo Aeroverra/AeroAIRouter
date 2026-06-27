@@ -4,19 +4,31 @@
 // on Node's built-in fetch — copy this folder anywhere and run it.
 //
 // Configuration (env vars only):
-//   GITHUB_TOKEN               required — PAT with 'repo' scope
+//   GITHUB_TOKEN               required — PAT with 'repo' scope (the default token)
+//   GITHUB_TOKENS_JSON         optional — {"label": "token", ...} for multiple
+//                              scoped tokens, selectable per call via token_label
 //   GITHUB_DEFAULT_VISIBILITY  optional — "private" (default) or "public"
 
 const TOKEN = process.env.GITHUB_TOKEN || "";
 const DEFAULT_VIS = (process.env.GITHUB_DEFAULT_VISIBILITY || "private").toLowerCase();
 const API = "https://api.github.com";
 
-async function gh(path, method = "GET", body) {
-  if (!TOKEN) throw new Error("GITHUB_TOKEN is not set");
+let TOKENS = {};
+try { TOKENS = JSON.parse(process.env.GITHUB_TOKENS_JSON || "{}"); } catch { TOKENS = {}; }
+const TOKEN_LABELS = Object.keys(TOKENS);
+
+function pickToken(label) {
+  if (label && TOKENS[label]) return TOKENS[label];
+  return TOKEN || TOKENS[TOKEN_LABELS[0]] || "";
+}
+
+async function gh(path, method = "GET", body, label) {
+  const token = pickToken(label);
+  if (!token) throw new Error("No GitHub token configured" + (label ? " for label '" + label + "'" : ""));
   const res = await fetch(API + path, {
     method,
     headers: {
-      Authorization: "Bearer " + TOKEN,
+      Authorization: "Bearer " + token,
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": "aeroairouter-github-mcp",
@@ -47,7 +59,7 @@ const TOOLS = [
     },
     run: async (a) => {
       const isPriv = typeof a.private === "boolean" ? a.private : DEFAULT_VIS !== "public";
-      const r = await gh("/user/repos", "POST", { name: a.name, description: a.description || "", private: isPriv, auto_init: a.auto_init !== false });
+      const r = await gh("/user/repos", "POST", { name: a.name, description: a.description || "", private: isPriv, auto_init: a.auto_init !== false }, a.token_label);
       return "Created " + r.full_name + " (" + (r.private ? "private" : "public") + ")\n" + r.html_url;
     },
   },
@@ -63,7 +75,7 @@ const TOOLS = [
     },
     run: async (a) => {
       const pp = Math.min(a.per_page || 30, 100);
-      const r = await gh("/user/repos?per_page=" + pp + "&sort=" + (a.sort || "updated"));
+      const r = await gh("/user/repos?per_page=" + pp + "&sort=" + (a.sort || "updated"), "GET", undefined, a.token_label);
       return r.map((x) => x.full_name + (x.private ? " (private)" : "")).join("\n") || "(no repositories)";
     },
   },
@@ -76,7 +88,7 @@ const TOOLS = [
       required: ["owner", "repo"],
     },
     run: async (a) => {
-      const r = await gh("/repos/" + a.owner + "/" + a.repo);
+      const r = await gh("/repos/" + a.owner + "/" + a.repo, "GET", undefined, a.token_label);
       return JSON.stringify({ full_name: r.full_name, private: r.private, description: r.description, default_branch: r.default_branch, url: r.html_url, stars: r.stargazers_count, open_issues: r.open_issues_count }, null, 2);
     },
   },
@@ -89,7 +101,7 @@ const TOOLS = [
       required: ["owner", "repo", "private"],
     },
     run: async (a) => {
-      const r = await gh("/repos/" + a.owner + "/" + a.repo, "PATCH", { private: !!a.private });
+      const r = await gh("/repos/" + a.owner + "/" + a.repo, "PATCH", { private: !!a.private }, a.token_label);
       return r.full_name + " is now " + (r.private ? "private" : "public");
     },
   },
@@ -102,7 +114,7 @@ const TOOLS = [
       required: ["owner", "repo", "title"],
     },
     run: async (a) => {
-      const r = await gh("/repos/" + a.owner + "/" + a.repo + "/issues", "POST", { title: a.title, body: a.body || "" });
+      const r = await gh("/repos/" + a.owner + "/" + a.repo + "/issues", "POST", { title: a.title, body: a.body || "" }, a.token_label);
       return "Opened #" + r.number + ": " + r.html_url;
     },
   },
@@ -115,7 +127,7 @@ const TOOLS = [
       required: ["owner", "repo"],
     },
     run: async (a) => {
-      const r = await gh("/repos/" + a.owner + "/" + a.repo + "/issues?state=" + (a.state || "open") + "&per_page=50");
+      const r = await gh("/repos/" + a.owner + "/" + a.repo + "/issues?state=" + (a.state || "open") + "&per_page=50", "GET", undefined, a.token_label);
       return r.filter((i) => !i.pull_request).map((i) => "#" + i.number + " [" + i.state + "] " + i.title).join("\n") || "(no issues)";
     },
   },
@@ -123,8 +135,8 @@ const TOOLS = [
     name: "whoami",
     description: "Show the authenticated GitHub user.",
     inputSchema: { type: "object", properties: {} },
-    run: async () => {
-      const r = await gh("/user");
+    run: async (a) => {
+      const r = await gh("/user", "GET", undefined, a.token_label);
       return r.login + (r.name ? " (" + r.name + ")" : "");
     },
   },
@@ -145,7 +157,18 @@ async function handle(line) {
   if (method === "notifications/initialized") return; // notification, no reply
   if (method === "ping") return ok(id, {});
   if (method === "tools/list") {
-    return ok(id, { tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) });
+    // When more than one named token is configured, expose a token_label selector
+    // so the model can pick a scoped credential per call.
+    const multi = TOKEN_LABELS.length > 1;
+    return ok(id, {
+      tools: TOOLS.map((t) => {
+        const schema = { type: "object", properties: { ...t.inputSchema.properties }, required: t.inputSchema.required };
+        if (multi) {
+          schema.properties.token_label = { type: "string", enum: TOKEN_LABELS, description: "Which configured token to use: " + TOKEN_LABELS.join(", ") + ". Defaults to the primary token." };
+        }
+        return { name: t.name, description: t.description, inputSchema: schema };
+      }),
+    });
   }
   if (method === "tools/call") {
     const t = TOOLS.find((x) => x.name === (params && params.name));

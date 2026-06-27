@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Config UI: plugin nav, multi-token, secret reveal
+- Plugins tab now lists plugins (toggle + "Configure →"); configurable plugins
+  expand into their own sub-tabs in the sidebar.
+- Plugins can declare multiple scoped tokens (`tokens` config field). Each token
+  has a **Check** button that reports the token's identity and scopes via the
+  plugin's `checkToken()`. GitHub tools gain an optional `token_label` to pick a
+  scoped credential per call; Cloudflare stores multiple and uses the primary.
+- Any stored secret/credential (native or plugin) can be revealed in place by an
+  authenticated admin (`POST /api/secrets/reveal`, allowed keys only).
+- Access & URLs moved into the Network tab.
+
 ### Plugins + MCP
 - The bot is now an MCP client. Plugin and MCP tools register into the existing
   tool registry; they default to owner-only trust.

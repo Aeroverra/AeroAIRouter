@@ -314,6 +314,39 @@ export function createApp() {
     }
   });
 
+  // ---- reveal a stored secret value (authenticated admin only) ----
+  app.post("/api/secrets/reveal", requireAuth, requireCsrf, (req, res) => {
+    const key = req.body && req.body.key;
+    if (!key || !io.isRevealableKey(key)) return res.status(400).json({ error: "invalid key" });
+    const map = io.readSecretsMap();
+    const val = process.env[key] !== undefined ? process.env[key] : map[key];
+    if (val === undefined) return res.status(404).json({ error: "not set" });
+    res.json({ value: val });
+  });
+
+  // ---- validate a token against a plugin's checkToken() and report scopes ----
+  app.post("/api/plugins/:name/check-token", requireAuth, requireCsrf, async (req, res) => {
+    const name = req.params.name;
+    if (!PLUGIN_NAME_RE.test(name)) return res.status(400).json({ error: "invalid plugin name" });
+    let plugins = [];
+    try { plugins = await discoverPlugins(); } catch (err) { return res.status(500).json({ error: err.message }); }
+    const p = plugins.find((x) => x.name === name);
+    if (!p || !p._mod || typeof p._mod.checkToken !== "function") {
+      return res.status(400).json({ error: "this plugin can't check tokens" });
+    }
+    let token = req.body && req.body.token;
+    if (!token && req.body && req.body.key && io.isRevealableKey(req.body.key)) {
+      token = io.readSecretsMap()[req.body.key];
+    }
+    if (!token) return res.status(400).json({ error: "no token (type one or save it first)" });
+    try {
+      const r = await p._mod.checkToken(token);
+      res.json(r || { ok: false, error: "no result" });
+    } catch (err) {
+      res.json({ ok: false, error: err.message });
+    }
+  });
+
   // ---- MCP servers (direct + plugin-provided) ----
   app.get("/api/mcp", requireAuth, async (req, res) => {
     const cfg = io.readConfig();
