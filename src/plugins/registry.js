@@ -73,11 +73,21 @@ export async function discoverPlugins() {
   return out;
 }
 
-// enabled if: not explicitly disabled, AND (explicitly enabled OR on by default).
+// "Uninstalled" plugins are hidden from active use and from the installed list in
+// the UI; their folder stays on disk (bundled ones can be reinstalled). Tracked in
+// config.plugins.uninstalled.
+export function isPluginUninstalled(name, config) {
+  const un = config && config.plugins && Array.isArray(config.plugins.uninstalled) ? config.plugins.uninstalled : [];
+  return un.includes(name);
+}
+
+// enabled if: not uninstalled, not explicitly disabled, AND (explicitly enabled OR
+// on by default).
 export function isPluginEnabled(name, descriptor, config) {
   const plugins = (config && config.plugins) || {};
   const enabled = Array.isArray(plugins.enabled) ? plugins.enabled : [];
   const disabled = Array.isArray(plugins.disabled) ? plugins.disabled : [];
+  if (isPluginUninstalled(name, config)) return false;
   if (disabled.includes(name)) return false;
   if (enabled.includes(name)) return true;
   return !!(descriptor && descriptor.enabledByDefault);

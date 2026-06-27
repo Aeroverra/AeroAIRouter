@@ -13,7 +13,7 @@ import * as io from "./configio.js";
 import * as auth from "./auth.js";
 import { accessUrls, advertiseMdns, bindSuggestions } from "./netinfo.js";
 import { SECTIONS } from "./schema.js";
-import { discoverPlugins, isPluginEnabled } from "../plugins/registry.js";
+import { discoverPlugins, isPluginEnabled, isPluginUninstalled } from "../plugins/registry.js";
 
 // Live MCP status written by the bot process at startup (DATA_DIR/mcp-status.json).
 function readMcpStatus() {
@@ -422,6 +422,7 @@ export function createApp() {
         name: p.name, label: p.label, description: p.description,
         hasMcp: !!p.hasMcp, hasRegister: !!p.hasRegister, hasCheckToken: !!p.hasCheckToken, ui: p.ui || null, broken: !!p.broken, error: p.error || null,
         enabled: isPluginEnabled(p.name, p, cfg), enabledByDefault: !!p.enabledByDefault,
+        uninstalled: isPluginUninstalled(p.name, cfg), bundled: (p.dir || "").startsWith(INSTALL_DIR),
         configSchema: p.configSchema || [], secretKeys: p.secrets || [],
         config: (cfg.plugins && cfg.plugins.config && cfg.plugins.config[p.name]) || {},
         defaults: p.defaults || {},
@@ -448,6 +449,56 @@ export function createApp() {
         cfg.plugins.enabled = [...en];
         cfg.plugins.disabled = [...dis];
       }
+      io.writeConfig(cfg);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ---- uninstall a plugin (mark uninstalled, clear its config + secrets) ----
+  // The folder stays on disk; bundled plugins can be reinstalled later.
+  app.delete("/api/plugins/:name", requireAuth, requireCsrf, async (req, res) => {
+    const name = req.params.name;
+    if (!PLUGIN_NAME_RE.test(name)) return res.status(400).json({ error: "invalid plugin name" });
+    let descriptor = null;
+    try { descriptor = (await discoverPlugins()).find((p) => p.name === name); } catch {}
+    try {
+      const cfg = io.readConfig();
+      cfg.plugins = cfg.plugins || {};
+      const un = new Set(Array.isArray(cfg.plugins.uninstalled) ? cfg.plugins.uninstalled : []);
+      un.add(name);
+      cfg.plugins.uninstalled = [...un];
+      cfg.plugins.enabled = (Array.isArray(cfg.plugins.enabled) ? cfg.plugins.enabled : []).filter((n) => n !== name);
+      cfg.plugins.disabled = (Array.isArray(cfg.plugins.disabled) ? cfg.plugins.disabled : []).filter((n) => n !== name);
+      if (cfg.plugins.config) delete cfg.plugins.config[name];
+      io.writeConfig(cfg);
+
+      // Clear the plugin's secrets (declared keys + any stored multi-token variants).
+      const bases = (descriptor && Array.isArray(descriptor.secrets) ? descriptor.secrets : []);
+      if (bases.length) {
+        const map = io.readSecretsMap();
+        const updates = {};
+        for (const k of Object.keys(map)) {
+          if (bases.some((b) => k === b || k.startsWith(b + "_"))) updates[k] = null;
+        }
+        if (Object.keys(updates).length) io.updateSecrets(updates);
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ---- reinstall a previously uninstalled plugin ----
+  app.post("/api/plugins/:name/reinstall", requireAuth, requireCsrf, (req, res) => {
+    const name = req.params.name;
+    if (!PLUGIN_NAME_RE.test(name)) return res.status(400).json({ error: "invalid plugin name" });
+    try {
+      const cfg = io.readConfig();
+      cfg.plugins = cfg.plugins || {};
+      cfg.plugins.uninstalled = (Array.isArray(cfg.plugins.uninstalled) ? cfg.plugins.uninstalled : []).filter((n) => n !== name);
+      cfg.plugins.disabled = (Array.isArray(cfg.plugins.disabled) ? cfg.plugins.disabled : []).filter((n) => n !== name);
       io.writeConfig(cfg);
       res.json({ ok: true });
     } catch (err) {

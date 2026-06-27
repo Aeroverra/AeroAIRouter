@@ -57,7 +57,7 @@ const defaults = {
     maxHistoryPerChannel: 100,
   },
   persona: { emoji: "" },
-  plugins: { enabled: [], disabled: [], config: {} },
+  plugins: { enabled: [], disabled: [], uninstalled: [], config: {} },
   mcp: { servers: [] }, // direct MCP servers: [{ name, transport, command, args, env, enabled, trust }]
   review: { policy: "allow", dangerPatterns: [], allowReviewerOverride: false },
   features: { voice: false },

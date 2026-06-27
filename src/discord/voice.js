@@ -14,12 +14,13 @@ import { pipeline } from "stream/promises";
 import { Transform } from "stream";
 import config from "../config/index.js";
 
-const VOICE_CHANNEL_ID = config.voice.channelId || "";
-const TTS_CACHE_DIR = config.voice.ttsCacheDir || "/tmp/aeroairouter-tts";
+const vcfg = (config.plugins && config.plugins.config && config.plugins.config.voice) || config.voice || {};
+const VOICE_CHANNEL_ID = vcfg.channelId || "";
+const TTS_CACHE_DIR = vcfg.ttsCacheDir || "/tmp/aeroairouter-tts";
 const WHISPER_VENV =
-  config.voice.whisperPath || process.env.WHISPER_PYTHON || join(process.env.HOME || "", ".whisper-venv/bin/python3");
+  vcfg.whisperPath || process.env.WHISPER_PYTHON || join(process.env.HOME || "", ".whisper-venv/bin/python3");
 const EDGE_TTS =
-  config.voice.edgeTtsPath || process.env.EDGE_TTS || join(process.env.HOME || "", ".local/bin/edge-tts");
+  vcfg.edgeTtsPath || process.env.EDGE_TTS || join(process.env.HOME || "", ".local/bin/edge-tts");
 
 let connection = null;
 let player = null;

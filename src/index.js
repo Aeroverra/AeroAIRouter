@@ -8,6 +8,7 @@ import { bootCatchUp } from "./discord/bootup.js";
 import { startVoiceMonitor, stopVoiceMonitor, setupVoiceAutoJoin } from "./discord/voice.js";
 import { resumePersistedAgents } from "./discord/subagent.js";
 import { loadPlugins } from "./plugins/loader.js";
+import { isPluginEnabled } from "./plugins/registry.js";
 import { startMcp } from "./mcp/client.js";
 import { setUpdateClient, startSelfUpdate, stopSelfUpdate } from "./tools/self-update.js";
 import { writeFileSync, readFileSync, existsSync, unlinkSync } from "fs";
@@ -64,11 +65,12 @@ async function start() {
   startWatchdog();
   setUpdateClient(client);
   startSelfUpdate();
-  if (config.features && config.features.voice) {
+  const voiceOn = isPluginEnabled("voice", { enabledByDefault: false }, config) || !!(config.features && config.features.voice);
+  if (voiceOn) {
     startVoiceMonitor();
     setupVoiceAutoJoin(client, handleMessage);
   } else {
-    console.log("[azula] Voice disabled (set features.voice=true to enable)");
+    console.log("[azula] Voice disabled (enable the Voice plugin to turn it on)");
   }
 
   pruneInterval = setInterval(() => {

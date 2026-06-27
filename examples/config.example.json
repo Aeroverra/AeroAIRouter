@@ -23,14 +23,14 @@
     "maxHistoryPerChannel": 100
   },
   "persona": { "emoji": "" },
-  "features": { "voice": false },
-  "voice": { "channelId": "", "whisperPath": "", "edgeTtsPath": "", "ttsCacheDir": "/tmp/aeroairouter-tts" },
   "plugins": {
     "enabled": [],
     "disabled": [],
+    "uninstalled": [],
     "config": {
       "github": { "defaultVisibility": "private" },
-      "cloudflare": { "accountId": "" }
+      "cloudflare": { "accountId": "" },
+      "voice": { "channelId": "", "whisperPath": "", "edgeTtsPath": "", "ttsCacheDir": "/tmp/aeroairouter-tts" }
     }
   },
   "mcp": {

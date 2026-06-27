@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Control panel rewrite
+- The config UI was **rebuilt** on Preact + signals with a real design-token
+  system and a component library (esbuild bundles `src/ui/client/` → committed
+  `public/app.js` + `app.css`, so a plain clone/`git pull` needs no build step;
+  strict CSP unchanged — no inline/CDN). Replaces the previous single 1500-line
+  imperative script that full-re-rendered on every navigation.
+- Unified save model: one sticky save bar for settings, plugin config, and MCP
+  edits (the old mix of a global bar + per-card Save buttons is gone). Native
+  `window.confirm`/`prompt` replaced by themed dialogs (incl. a proper
+  change-password dialog); toasts now stack instead of overlapping.
+- Light/dark themes, a responsive drawer sidebar, real toggle switches, keyboard
+  focus rings, and `label`-associated fields. Restrained the pink accent to
+  primary actions, focus, and the active nav item.
+- New **Dashboard** landing page (bot status, channel/plugin/MCP-tool stats, live
+  connection health, setup checklist) instead of dropping straight into settings;
+  grouped sidebar navigation (Setup / Extensions / System).
+- **Essentials** is broken into labelled subsections (Discord / Claude / Extras).
+  Removed the redundant **AI** tab (its fields folded into Essentials → Claude,
+  Advanced).
+- Token checks (Cloudflare, GitHub) now render a structured breakdown —
+  identity, permission/scope chips, and the accounts + domains the token can
+  reach — instead of one comma-joined line.
+- Plugins gained an **Uninstall** button (with confirmation; clears the plugin's
+  config + stored credentials). Bundled plugins move to an "Available to
+  reinstall" list and can be **reinstalled** anytime. Backed by
+  `config.plugins.uninstalled`, `DELETE /api/plugins/:name`, and
+  `POST /api/plugins/:name/reinstall`.
+- **Voice** is now a bundled plugin (enable/configure under Plugins) rather than
+  a top-level `features.voice` flag; the legacy flag still works as a fallback.
+
 ### gogcli (Google) plugin + UI setup
 - New bundled **`gog`** plugin wrapping the [gogcli](https://github.com/openclaw/gogcli)
   `gog` binary: Gmail/Calendar/Drive tools through one sign-in. Idle until installed

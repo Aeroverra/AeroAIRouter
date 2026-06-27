@@ -36,33 +36,38 @@ export async function checkToken(token) {
       return { ok: false, error: msg };
     }
     const id = v.d.result && v.d.result.id ? v.d.result.id.slice(0, 8) + "…" : "token";
-    const details = [{ label: "Status", value: (v.d.result && v.d.result.status) || "unknown" }];
+    const status = (v.d.result && v.d.result.status) || "unknown";
 
     // Permission groups — only readable if the token has "API Tokens Read"; best effort.
+    const permissions = [];
     if (v.d.result && v.d.result.id) {
       const t = await get("/user/tokens/" + v.d.result.id);
       if (t.ok && t.d.result && Array.isArray(t.d.result.policies)) {
         const perms = new Set();
         for (const p of t.d.result.policies) for (const g of p.permission_groups || []) if (g.name) perms.add(g.name);
-        if (perms.size) details.push({ label: "Permissions", value: [...perms].join(", ") });
+        for (const name of perms) permissions.push(name);
       }
     }
 
     // What it can actually reach: accounts + zones (domains).
+    const accounts = [];
     const a = await get("/accounts?per_page=50");
     if (a.ok && Array.isArray(a.d.result)) {
-      details.push({ label: "Accounts (" + a.d.result.length + ")", value: a.d.result.map((x) => x.name).join(", ") || "none" });
+      for (const x of a.d.result) accounts.push({ name: x.name, id: x.id });
     }
+    const zones = [];
+    let zonesTotal = 0;
     const z = await get("/zones?per_page=50");
     if (z.ok && Array.isArray(z.d.result)) {
-      const total = (z.d.result_info && z.d.result_info.total_count) || z.d.result.length;
-      const names = z.d.result.map((x) => x.name);
-      let val = names.join(", ") || "none";
-      if (total > names.length) val += " … (+" + (total - names.length) + " more)";
-      details.push({ label: "Domains (" + total + ")", value: val });
+      for (const x of z.d.result) zones.push({ name: x.name, id: x.id });
+      zonesTotal = (z.d.result_info && z.d.result_info.total_count) || zones.length;
     }
 
-    return { ok: true, identity: id, scopes: [], details };
+    const out = { ok: true, identity: id, status, permissions, accounts, zones, zonesTotal, scopes: [] };
+    if (!permissions.length) {
+      out.permissionsNote = "Token can't read its own permissions (needs the 'API Tokens Read' permission).";
+    }
+    return out;
   } catch (err) {
     return { ok: false, error: err.message };
   }
