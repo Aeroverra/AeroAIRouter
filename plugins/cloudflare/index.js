@@ -22,18 +22,47 @@ export const configSchema = [
 ];
 
 export async function checkToken(token) {
-  try {
-    const r = await fetch("https://api.cloudflare.com/client/v4/user/tokens/verify", {
-      headers: { Authorization: "Bearer " + token },
-    });
+  const API = "https://api.cloudflare.com/client/v4";
+  const headers = { Authorization: "Bearer " + token };
+  const get = async (path) => {
+    const r = await fetch(API + path, { headers, signal: AbortSignal.timeout(8000) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok || d.success === false) {
-      const msg = (d.errors && d.errors[0] && d.errors[0].message) || ("HTTP " + r.status);
+    return { ok: r.ok && d.success !== false, status: r.status, d };
+  };
+  try {
+    const v = await get("/user/tokens/verify");
+    if (!v.ok) {
+      const msg = (v.d.errors && v.d.errors[0] && v.d.errors[0].message) || ("HTTP " + v.status);
       return { ok: false, error: msg };
     }
-    const id = d.result && d.result.id ? d.result.id.slice(0, 8) + "…" : "token";
-    const status = (d.result && d.result.status) || "unknown";
-    return { ok: true, identity: id, scopes: ["status: " + status] };
+    const id = v.d.result && v.d.result.id ? v.d.result.id.slice(0, 8) + "…" : "token";
+    const details = [{ label: "Status", value: (v.d.result && v.d.result.status) || "unknown" }];
+
+    // Permission groups — only readable if the token has "API Tokens Read"; best effort.
+    if (v.d.result && v.d.result.id) {
+      const t = await get("/user/tokens/" + v.d.result.id);
+      if (t.ok && t.d.result && Array.isArray(t.d.result.policies)) {
+        const perms = new Set();
+        for (const p of t.d.result.policies) for (const g of p.permission_groups || []) if (g.name) perms.add(g.name);
+        if (perms.size) details.push({ label: "Permissions", value: [...perms].join(", ") });
+      }
+    }
+
+    // What it can actually reach: accounts + zones (domains).
+    const a = await get("/accounts?per_page=50");
+    if (a.ok && Array.isArray(a.d.result)) {
+      details.push({ label: "Accounts (" + a.d.result.length + ")", value: a.d.result.map((x) => x.name).join(", ") || "none" });
+    }
+    const z = await get("/zones?per_page=50");
+    if (z.ok && Array.isArray(z.d.result)) {
+      const total = (z.d.result_info && z.d.result_info.total_count) || z.d.result.length;
+      const names = z.d.result.map((x) => x.name);
+      let val = names.join(", ") || "none";
+      if (total > names.length) val += " … (+" + (total - names.length) + " more)";
+      details.push({ label: "Domains (" + total + ")", value: val });
+    }
+
+    return { ok: true, identity: id, scopes: [], details };
   } catch (err) {
     return { ok: false, error: err.message };
   }

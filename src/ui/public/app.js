@@ -974,10 +974,11 @@ function pluginTokensField(wrap, f, conf, secrets, secretEdits, pluginName) {
       const body = typed && typed.trim() ? { token: typed.trim() } : { key: r.key };
       const res = await api("POST", "/api/plugins/" + pluginName + "/check-token", body);
       if (!res.ok) { out.textContent = "✗ " + (res.error || "invalid"); out.className = "check bad"; return; }
-      const scopes = (res.scopes && res.scopes.length) ? res.scopes.join(", ") : (res.note || "no scopes reported");
       out.innerHTML = "";
       out.appendChild(el("span", { class: "check ok", text: "✓ " + (res.identity || "valid") }));
-      out.appendChild(el("div", { class: "hint", text: "scopes: " + scopes }));
+      if (res.scopes && res.scopes.length) out.appendChild(el("div", { class: "hint", text: "scopes: " + res.scopes.join(", ") }));
+      else if (res.note) out.appendChild(el("div", { class: "hint", text: res.note }));
+      for (const dline of res.details || []) out.appendChild(el("div", { class: "hint", text: dline.label + ": " + dline.value }));
     } catch (ex) { out.textContent = "✗ " + ex.message; out.className = "check bad"; }
   }
 
