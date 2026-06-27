@@ -146,11 +146,26 @@ A plugin also exports `meta`, `enabledByDefault`, `secrets`, `defaults`, and
 `configSchema` (the fields shown in its UI panel). Tools registered by plugins/MCP
 default to **owner-only** trust.
 
-Bundled plugins: **`github`** and **`cloudflare`** (each wraps a self-contained
-MCP server under `plugins/<name>/mcp/`, on by default), and
+Bundled plugins: **`github`**, **`cloudflare`**, and **`gmail`** (each wraps a
+self-contained MCP server under `plugins/<name>/mcp/`, on by default), and
 **`example-plugin`** (a template). A built-in safety floor
 (`review.dangerPatterns`) denies destructive bash commands even when no plugin is
 loaded.
+
+### Gmail
+
+The `gmail` plugin reads/sends mail via the Gmail REST API. It needs Google OAuth
+(client id + secret + a refresh token). Set up a **Desktop-app** OAuth client in
+Google Cloud (enable the Gmail API; publish the consent screen to *Production* so
+the refresh token doesn't expire after 7 days), then run once:
+
+```bash
+GOOGLE_CLIENT_ID=xxx GOOGLE_CLIENT_SECRET=yyy node scripts/get-google-refresh-token.mjs
+```
+
+Paste the three values into the Gmail plugin panel and click **Test connection**.
+The plugin stays idle until all three are set. (If you already use `gogcli`, its
+`client_secret.json` + `~/.config/gogcli/tokens.json` hold the same values.)
 
 ## MCP servers
 

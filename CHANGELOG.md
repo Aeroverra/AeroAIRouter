@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Gmail plugin
+- New bundled **`gmail`** plugin: a zero-dependency, fetch-based MCP server over
+  the Gmail REST API (tools: search, read, send, list_labels, modify, whoami).
+  Auth via Google OAuth (client id/secret + refresh token, projected as env).
+  Enabled by default but stays idle until configured, so it never adds failing
+  tools. `scripts/get-google-refresh-token.mjs` captures a refresh token via a
+  local browser sign-in. A "Test connection" button reports the mailbox + counts.
+
 ### Config UI: plugin nav, multi-token, secret reveal
 - Plugins tab now lists plugins (toggle + "Configure →"); configurable plugins
   expand into their own sub-tabs in the sidebar.

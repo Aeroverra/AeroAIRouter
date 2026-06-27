@@ -338,9 +338,12 @@ export function createApp() {
     if (!token && req.body && req.body.key && io.isRevealableKey(req.body.key)) {
       token = io.readSecretsMap()[req.body.key];
     }
-    if (!token) return res.status(400).json({ error: "no token (type one or save it first)" });
+    // token may be undefined: some plugins (e.g. gmail) use several stored secrets
+    // rather than a single pasted token. Give them an accessor over secrets.env.
+    const map = io.readSecretsMap();
+    const secret = (k) => (process.env[k] !== undefined ? process.env[k] : map[k]) || "";
     try {
-      const r = await p._mod.checkToken(token);
+      const r = await p._mod.checkToken(token, { secret });
       res.json(r || { ok: false, error: "no result" });
     } catch (err) {
       res.json({ ok: false, error: err.message });
@@ -417,7 +420,7 @@ export function createApp() {
     res.json({
       plugins: plugins.map((p) => ({
         name: p.name, label: p.label, description: p.description,
-        hasMcp: !!p.hasMcp, hasRegister: !!p.hasRegister, broken: !!p.broken, error: p.error || null,
+        hasMcp: !!p.hasMcp, hasRegister: !!p.hasRegister, hasCheckToken: !!p.hasCheckToken, broken: !!p.broken, error: p.error || null,
         enabled: isPluginEnabled(p.name, p, cfg), enabledByDefault: !!p.enabledByDefault,
         configSchema: p.configSchema || [], secretKeys: p.secrets || [],
         config: (cfg.plugins && cfg.plugins.config && cfg.plugins.config[p.name]) || {},

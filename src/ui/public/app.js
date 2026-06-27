@@ -892,6 +892,26 @@ function renderPluginConfig(c, name) {
 
   for (const f of p.configSchema || []) c.appendChild(pluginField(f, conf, secrets, secretEdits, p.name));
 
+  // Test connection (for plugins whose checkToken sources its own credentials,
+  // e.g. Gmail). Plugins with a per-token Check button don't need this.
+  if (p.hasCheckToken && !(p.configSchema || []).some((f) => f.type === "tokens")) {
+    const out = el("div", { class: "hint" });
+    const testBtn = el("button", { class: "ghost", text: "Test connection" });
+    testBtn.addEventListener("click", async () => {
+      out.textContent = "Checking…"; out.className = "hint";
+      try {
+        const res = await api("POST", "/api/plugins/" + p.name + "/check-token", {});
+        if (!res.ok) { out.textContent = "✗ " + (res.error || "failed"); out.className = "check bad"; return; }
+        out.innerHTML = "";
+        out.appendChild(el("span", { class: "check ok", text: "✓ " + (res.identity || "connected") }));
+        for (const d of res.details || []) out.appendChild(el("div", { class: "hint", text: d.label + ": " + d.value }));
+      } catch (ex) { out.textContent = "✗ " + ex.message; out.className = "check bad"; }
+    });
+    c.appendChild(el("div", { class: "row" }, [testBtn]));
+    c.appendChild(out);
+    c.appendChild(el("p", { class: "hint", text: "Tests the last SAVED credentials — Save first if you just entered them." }));
+  }
+
   const saveBtn = el("button", { text: "Save" });
   const status = el("span", { class: "hint" });
   saveBtn.addEventListener("click", async () => {

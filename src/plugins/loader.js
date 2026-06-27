@@ -39,6 +39,7 @@ export async function loadPlugins() {
       if (typeof mod.register === "function") {
         await mod.register(buildPluginApi(p.name));
       }
+      let mcpAdded = false;
       if (typeof mod.mcp === "function") {
         const ctx = {
           dir: p.dir,
@@ -47,9 +48,9 @@ export async function loadPlugins() {
           secret: (k) => process.env[k] || "",
         };
         const spec = mod.mcp(ctx);
-        if (spec) addPluginServer(p.name, spec, { label: p.label });
+        if (spec) { addPluginServer(p.name, spec, { label: p.label }); mcpAdded = true; }
       }
-      console.log("[plugins] loaded " + p.name + (typeof mod.mcp === "function" ? " (+mcp)" : ""));
+      console.log("[plugins] loaded " + p.name + (mcpAdded ? " (+mcp)" : (typeof mod.mcp === "function" ? " (mcp idle — not configured)" : "")));
     } catch (err) {
       console.error("[plugins] failed to init " + p.name + ": " + err.message);
     }
