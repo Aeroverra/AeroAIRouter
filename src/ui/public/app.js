@@ -398,7 +398,7 @@ function renderDash() {
   const onPlugins = state.active === "__plugins" || (state.active || "").startsWith("__plugin:");
   if (onPlugins) {
     for (const p of state.pluginList || []) {
-      if (!(p.configSchema || []).length) continue;
+      if (!pluginConfigurable(p)) continue;
       addNav("__plugin:" + p.name, "› " + (p.label || p.name), { child: true });
     }
   }
@@ -862,8 +862,8 @@ function renderPluginsList(c) {
     ]));
     if (p.description) card.appendChild(el("p", { class: "hint", text: p.description }));
     if (p.broken) card.appendChild(el("p", { class: "err", text: p.error || "failed to load" }));
-    if ((p.configSchema || []).length) {
-      const cfgBtn = el("button", { class: "ghost", text: "Configure →" });
+    if (pluginConfigurable(p)) {
+      const cfgBtn = el("button", { class: "ghost", text: p.ui ? "Set up →" : "Configure →" });
       cfgBtn.addEventListener("click", () => { if (confirmLeave()) { state.active = "__plugin:" + p.name; renderDash(); } });
       card.appendChild(el("div", { class: "row" }, [cfgBtn]));
     } else {
@@ -1033,6 +1033,12 @@ function pluginTokensField(wrap, f, conf, secrets, secretEdits, pluginName) {
 
 async function pluginAction(name, action, body) {
   return api("POST", "/api/plugins/" + name + "/action/" + action, body || {});
+}
+
+// A plugin is "configurable" (gets a Configure button + sidebar sub-tab) if it has
+// config fields, a custom setup UI, or a checkable credential.
+function pluginConfigurable(p) {
+  return !!((p.configSchema || []).length || p.ui || p.hasCheckToken);
 }
 
 // Custom setup panel for the gogcli (gog) plugin — install + OAuth, all in-UI.
