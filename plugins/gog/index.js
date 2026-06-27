@@ -31,6 +31,14 @@ function resolveBin(home) {
   return "gog";
 }
 
+// Ensure the file-keyring password exists (gog needs it for every keyring write,
+// including storing the OAuth client). Generated once and saved to secrets.env.
+function ensureKeyringPw(ctx) {
+  let pw = ctx.secret("GOG_KEYRING_PASSWORD");
+  if (!pw) { pw = randomBytes(24).toString("base64url"); ctx.setSecrets({ GOG_KEYRING_PASSWORD: pw }); }
+  return pw;
+}
+
 // ---- UI-driven setup actions (run in the UI process; ctx provided by server) ----
 export const actions = {
   async status(_args, ctx) {
@@ -63,10 +71,11 @@ export const actions = {
     try { JSON.parse(clientJson); } catch { throw new Error("That isn't valid JSON."); }
     const bin = resolveBin(ctx.home);
     if (bin === "gog") throw new Error("Install gogcli first.");
+    const pw = ensureKeyringPw(ctx);
     const tmp = join(ctx.home, ".gog-client-tmp.json");
     writeFileSync(tmp, clientJson, { mode: 0o600 });
     try {
-      const r = await ctx.exec(bin, ["auth", "credentials", "set", tmp], {});
+      const r = await ctx.exec(bin, ["auth", "credentials", "set", tmp], { env: { GOG_KEYRING_PASSWORD: pw } });
       if (r.code !== 0) throw new Error((r.stderr || r.stdout || "failed").trim().slice(0, 400));
     } finally { try { unlinkSync(tmp); } catch {} }
     return { ok: true };
@@ -76,8 +85,7 @@ export const actions = {
     if (!email) throw new Error("Enter the Google account email.");
     const bin = resolveBin(ctx.home);
     if (bin === "gog") throw new Error("Install gogcli first.");
-    let pw = ctx.secret("GOG_KEYRING_PASSWORD");
-    if (!pw) { pw = randomBytes(24).toString("base64url"); ctx.setSecrets({ GOG_KEYRING_PASSWORD: pw }); }
+    const pw = ensureKeyringPw(ctx);
     const svc = services || "gmail,calendar,drive";
     const r = await ctx.exec(bin, ["--json", "auth", "add", email, "--remote", "--step", "1", "--services", svc, "--gmail-scope", "full", "--force-consent"], { env: { GOG_KEYRING_PASSWORD: pw }, timeout: 30000 });
     if (r.code !== 0) throw new Error((r.stderr || r.stdout || "failed").trim().slice(0, 400));
