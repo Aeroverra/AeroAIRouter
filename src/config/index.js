@@ -47,7 +47,7 @@ const defaults = {
     channels: [],
     guilds: {},
     people: {},
-    activity: { text: "", type: 0, url: "" },
+    activity: { text: "", url: "" },
   },
   ai: {
     auth: { mode: "auto" }, // auto | apikey | oauth
@@ -64,7 +64,7 @@ const defaults = {
   voice: { channelId: "", whisperPath: "", edgeTtsPath: "", ttsCacheDir: "/tmp/aeroairouter-tts" },
   update: { enabled: false, branch: "main", intervalHours: 24, channelId: "" },
   integrations: {
-    github: { defaultVisibility: "private", tokens: [] }, // tokens: [{ label, key }] — values in secrets.env
+    github: { defaultVisibility: "private" },
     cloudflare: { enabled: false, accountId: "" },
   },
 };

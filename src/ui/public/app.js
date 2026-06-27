@@ -879,6 +879,7 @@ function renderPluginConfig(c, name) {
   back.addEventListener("click", () => { if (confirmLeave()) { state.active = "__plugins"; renderDash(); } });
   c.appendChild(back);
   if (!p) { c.appendChild(el("p", { class: "err", text: "Plugin not found." })); return; }
+  if (p.ui === "gogcli-setup") return renderGogSetup(c, p);
   c.appendChild(el("h2", { text: p.label || p.name }));
   if (p.description) c.appendChild(el("p", { class: "section-help", text: p.description }));
   if (p.broken) { c.appendChild(el("p", { class: "err", text: p.error || "failed to load" })); return; }
@@ -1028,6 +1029,109 @@ function pluginTokensField(wrap, f, conf, secrets, secretEdits, pluginName) {
   draw();
   commit();
   return wrap;
+}
+
+async function pluginAction(name, action, body) {
+  return api("POST", "/api/plugins/" + name + "/action/" + action, body || {});
+}
+
+// Custom setup panel for the gogcli (gog) plugin — install + OAuth, all in-UI.
+function renderGogSetup(c, p) {
+  c.appendChild(el("h2", { text: p.label || "Google (gogcli)" }));
+  c.appendChild(el("p", { class: "section-help", text: "Set up Google access (Gmail, Calendar, Drive) entirely here. Restart the bot after you connect an account." }));
+  const host = el("div");
+  c.appendChild(host);
+  host.appendChild(el("p", { class: "hint", text: "Loading…" }));
+
+  const card = (title) => { const cd = el("div", { class: "plugin-card" }); cd.appendChild(el("div", { class: "plugin-head" }, [el("strong", { text: title })])); const body = el("div"); cd.appendChild(body); return { cd, body }; };
+  const fld = (label, inp) => { const w = el("div", { class: "field" }); w.appendChild(el("label", { text: label })); w.appendChild(inp); return w; };
+
+  async function refresh() {
+    let st;
+    try { st = await pluginAction(p.name, "status", {}); }
+    catch (ex) { host.innerHTML = ""; host.appendChild(el("p", { class: "err", text: ex.message })); return; }
+    render(st);
+  }
+
+  function render(st) {
+    host.innerHTML = "";
+
+    // 1. install
+    const s1 = card("1. Install gogcli");
+    if (st.installed) s1.body.appendChild(el("p", { class: "check ok", text: "✓ Installed " + (st.version || "") }));
+    else {
+      s1.body.appendChild(el("p", { class: "hint", text: "Downloads the gog binary for this server (~14MB). No Go toolchain needed." }));
+      const b = el("button", { text: "Install gogcli" }); const out = el("span", { class: "hint" });
+      b.addEventListener("click", async () => { b.disabled = true; out.textContent = "Installing…"; try { const r = await pluginAction(p.name, "install", {}); out.textContent = "✓ " + (r.version || "installed"); refresh(); } catch (ex) { out.textContent = "✗ " + ex.message; b.disabled = false; } });
+      s1.body.appendChild(el("div", { class: "row" }, [b, out]));
+    }
+    host.appendChild(s1.cd);
+
+    // 2. oauth client
+    const s2 = card("2. Google OAuth client");
+    s2.body.appendChild(el("p", { class: "hint" }, [
+      "Create a Desktop OAuth client at ", el("a", { href: "https://console.cloud.google.com/auth/clients", target: "_blank", rel: "noopener", text: "Google Cloud → Credentials ↗" }),
+      ". Enable the Gmail/Calendar/Drive APIs, set the consent screen to Production (avoids 7-day token expiry), then paste the downloaded client_secret.json below.",
+    ]));
+    const ta = el("textarea", { placeholder: '{"installed":{"client_id":"…","client_secret":"…",…}}' }); ta.style.minHeight = "90px";
+    const credBtn = el("button", { class: "ghost", text: "Save credentials" }); const credOut = el("span", { class: "hint" });
+    credBtn.addEventListener("click", async () => { credOut.textContent = "Saving…"; try { await pluginAction(p.name, "setCredentials", { clientJson: ta.value }); credOut.textContent = "✓ saved"; credOut.className = "check ok"; ta.value = ""; } catch (ex) { credOut.textContent = "✗ " + ex.message; credOut.className = "check bad"; } });
+    s2.body.appendChild(ta);
+    s2.body.appendChild(el("div", { class: "row" }, [credBtn, credOut]));
+    if (!st.installed) s2.cd.style.opacity = ".5";
+    host.appendChild(s2.cd);
+
+    // 3. connect account
+    const s3 = card("3. Connect a Google account");
+    const email = el("input", { type: "text", placeholder: "you@gmail.com", value: st.accounts[0] ? st.accounts[0].email : "" });
+    s3.body.appendChild(fld("Account email", email));
+    const startBtn = el("button", { text: "Start sign-in" });
+    const flow = el("div");
+    startBtn.addEventListener("click", async () => {
+      if (!email.value.trim()) { toast("Enter an email first", true); return; }
+      startBtn.disabled = true; flow.innerHTML = ""; flow.appendChild(el("p", { class: "hint", text: "Getting sign-in link…" }));
+      try {
+        const r = await pluginAction(p.name, "authStart", { email: email.value.trim() });
+        flow.innerHTML = "";
+        flow.appendChild(el("p", {}, ["1) ", el("a", { href: r.authUrl, target: "_blank", rel: "noopener", text: "Open Google sign-in ↗" }), " and approve access."]));
+        flow.appendChild(el("p", { class: "hint", text: "2) Your browser will land on a http://127.0.0.1:… page that fails to load — that's expected. Copy the full URL from the address bar and paste it below." }));
+        const redir = el("input", { type: "text", placeholder: "http://127.0.0.1:…/oauth2/callback?code=…" });
+        const finish = el("button", { text: "Finish connecting" }); const out = el("span", { class: "hint" });
+        finish.addEventListener("click", async () => { out.textContent = "Connecting…"; try { await pluginAction(p.name, "authFinish", { email: email.value.trim(), redirectUrl: redir.value }); out.textContent = "✓ connected"; out.className = "check ok"; toast("Connected " + email.value.trim()); refresh(); } catch (ex) { out.textContent = "✗ " + ex.message; out.className = "check bad"; } });
+        flow.appendChild(fld("Redirect URL", redir));
+        flow.appendChild(el("div", { class: "row" }, [finish, out]));
+      } catch (ex) { flow.innerHTML = ""; flow.appendChild(el("p", { class: "err", text: ex.message })); startBtn.disabled = false; }
+    });
+    s3.body.appendChild(el("div", { class: "row" }, [startBtn]));
+    s3.body.appendChild(flow);
+    if (st.accounts.length) s3.body.appendChild(el("p", { class: "check ok", text: "Connected: " + st.accounts.map((a) => a.email + (a.ok ? "" : " (token error — reconnect)")).join(", ") }));
+    if (!st.installed) s3.cd.style.opacity = ".5";
+    host.appendChild(s3.cd);
+
+    // 4. enable
+    const s4 = card("4. Enable");
+    const ready = st.installed && st.keyringSet && st.accounts.some((a) => a.ok);
+    const enableCb = el("input", { type: "checkbox" }); enableCb.checked = !!p.enabled; enableCb.style.width = "auto";
+    s4.body.appendChild(el("label", { class: "switch" }, [enableCb, " plugin enabled"]));
+    let acctSel = null;
+    if (st.accounts.length > 1) {
+      acctSel = el("select"); acctSel.appendChild(el("option", { value: "", text: "(default account)" }));
+      st.accounts.forEach((a) => acctSel.appendChild(el("option", { value: a.email, text: a.email })));
+      acctSel.value = (p.config && p.config.account) || "";
+      s4.body.appendChild(fld("Use account", acctSel));
+    }
+    const saveBtn = el("button", { text: "Save" }); const saveOut = el("span", { class: "hint" });
+    saveBtn.addEventListener("click", async () => {
+      try { const cfg = Object.assign({}, p.config || {}); if (acctSel) cfg.account = acctSel.value; await api("PUT", "/api/plugins/" + p.name, { enabled: enableCb.checked, config: cfg }); p.enabled = enableCb.checked; p.config = cfg; saveOut.textContent = "✓ saved"; saveOut.className = "check ok"; toast("Saved. Restart the bot to apply."); }
+      catch (ex) { saveOut.textContent = "✗ " + ex.message; saveOut.className = "check bad"; }
+    });
+    const restartB = el("button", { class: "ghost", text: "Restart bot" }); restartB.addEventListener("click", restartBot);
+    s4.body.appendChild(el("div", { class: "row" }, [saveBtn, restartB, saveOut]));
+    if (!ready) s4.body.appendChild(el("p", { class: "hint", text: "Finish steps 1–3, then enable and restart the bot." }));
+    host.appendChild(s4.cd);
+  }
+
+  refresh();
 }
 
 // ---------- MCP servers ----------

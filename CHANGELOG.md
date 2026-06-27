@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### gogcli (Google) plugin + UI setup
+- New bundled **`gog`** plugin wrapping the [gogcli](https://github.com/openclaw/gogcli)
+  `gog` binary: Gmail/Calendar/Drive tools through one sign-in. Idle until installed
+  + authenticated.
+- Fully **UI-driven setup** (no SSH): a custom Plugins panel installs the binary,
+  saves the OAuth client, runs the headless `--remote` sign-in (link out → paste the
+  redirect URL back), and enables the plugin. Backed by a generic plugin **actions**
+  mechanism (`POST /api/plugins/:name/action/:action`) and `scripts/install-gogcli.sh`.
+
+### Config cleanup
+- Removed dead config: `discord.activity.type`, `integrations.github.tokens`, and the
+  legacy `discord.guilds.home.id`. Dropped the unused `discord.elevatedUsers` UI field.
+- Decluttered the Essentials tab (removed the legacy guild/channel fields); the
+  still-used `discord.guilds.*` (voice, presence greetings, health/owner alerts) moved
+  to Discord → advanced with clear "Legacy:" labels.
+
 ### Gmail plugin
 - New bundled **`gmail`** plugin: a zero-dependency, fetch-based MCP server over
   the Gmail REST API (tools: search, read, send, list_labels, modify, whoami).

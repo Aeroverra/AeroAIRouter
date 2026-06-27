@@ -13,7 +13,7 @@
     "people": {
       "YOUR_DISCORD_USER_ID": { "name": "You", "trust": "owner" }
     },
-    "activity": { "text": "online", "type": 0, "url": "" }
+    "activity": { "text": "online", "url": "" }
   },
   "ai": {
     "auth": { "mode": "auto" },

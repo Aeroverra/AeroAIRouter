@@ -420,7 +420,7 @@ export function createApp() {
     res.json({
       plugins: plugins.map((p) => ({
         name: p.name, label: p.label, description: p.description,
-        hasMcp: !!p.hasMcp, hasRegister: !!p.hasRegister, hasCheckToken: !!p.hasCheckToken, broken: !!p.broken, error: p.error || null,
+        hasMcp: !!p.hasMcp, hasRegister: !!p.hasRegister, hasCheckToken: !!p.hasCheckToken, ui: p.ui || null, broken: !!p.broken, error: p.error || null,
         enabled: isPluginEnabled(p.name, p, cfg), enabledByDefault: !!p.enabledByDefault,
         configSchema: p.configSchema || [], secretKeys: p.secrets || [],
         config: (cfg.plugins && cfg.plugins.config && cfg.plugins.config[p.name]) || {},
@@ -450,6 +450,36 @@ export function createApp() {
       }
       io.writeConfig(cfg);
       res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ---- plugin actions (custom setup flows, e.g. gogcli install + OAuth) ----
+  app.post("/api/plugins/:name/action/:action", requireAuth, requireCsrf, async (req, res) => {
+    const { name, action } = req.params;
+    if (!PLUGIN_NAME_RE.test(name) || !/^[a-zA-Z0-9_]+$/.test(action)) return res.status(400).json({ error: "bad name" });
+    let plugins = [];
+    try { plugins = await discoverPlugins(); } catch (err) { return res.status(500).json({ error: err.message }); }
+    const p = plugins.find((x) => x.name === name);
+    if (!p || !p._mod || !p._mod.actions || typeof p._mod.actions[action] !== "function") {
+      return res.status(400).json({ error: "unknown action" });
+    }
+    const map = io.readSecretsMap();
+    const actionCtx = {
+      secret: (k) => (process.env[k] !== undefined ? process.env[k] : map[k]) || "",
+      setSecrets: (obj) => io.updateSecrets(obj),
+      home: io.AIROUTER_HOME,
+      installDir: INSTALL_DIR,
+      exec: (cmd, args, opts = {}) => new Promise((resolve) => {
+        execFile(cmd, args, { env: { ...process.env, ...(opts.env || {}) }, timeout: opts.timeout || 60000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+          resolve({ code: err ? (typeof err.code === "number" ? err.code : 1) : 0, stdout: stdout || "", stderr: stderr || (err ? err.message : "") });
+        });
+      }),
+    };
+    try {
+      const out = await p._mod.actions[action](req.body || {}, actionCtx);
+      res.json(out || { ok: true });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

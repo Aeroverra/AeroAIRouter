@@ -1,0 +1,10 @@
+{
+  "name": "aero-gog-mcp",
+  "version": "1.0.0",
+  "description": "MCP server (stdio) that wraps the gogcli (gog) binary for Gmail/Calendar/Drive. Env-driven.",
+  "type": "module",
+  "bin": { "aero-gog-mcp": "index.js" },
+  "main": "index.js",
+  "license": "MIT",
+  "engines": { "node": ">=20" }
+}

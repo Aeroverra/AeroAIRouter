@@ -50,6 +50,8 @@ function describe(name, entry, mod) {
     hasMcp: typeof mod.mcp === "function",
     hasRegister: typeof mod.register === "function",
     hasCheckToken: typeof mod.checkToken === "function",
+    hasActions: !!(mod.actions && typeof mod.actions === "object"),
+    ui: typeof mod.ui === "string" ? mod.ui : null,
     enabledByDefault: mod.enabledByDefault === true,
     secrets: Array.isArray(mod.secrets) ? mod.secrets : [],
     configSchema: Array.isArray(mod.configSchema) ? mod.configSchema : [],
