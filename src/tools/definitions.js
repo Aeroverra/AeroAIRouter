@@ -77,6 +77,15 @@ export const toolSchemas = [
     },
   },
   {
+    name: "view_image",
+    description: "Load an image file from disk into your vision so you can actually SEE it. Use this whenever you need to visually analyze, describe, OCR, or answer questions about the contents of an image file (png/jpg/jpeg/gif/webp). The image is returned to you as a real picture, not text. Do NOT claim you cannot see images — use this tool.",
+    input_schema: {
+      type: "object",
+      properties: { path: { type: "string", description: "Absolute path to the image file" } },
+      required: ["path"],
+    },
+  },
+  {
     name: "write_file",
     description: "Write content to a file. Creates parent dirs if needed.",
     input_schema: {
@@ -301,6 +310,19 @@ if (!(config.features && config.features.voice)) {
   }
 }
 
+// Convert a tool's return value into Anthropic tool_result `content`.
+// If the tool produced an image (view_image), return content blocks containing
+// a real image so the model can see it; otherwise stringify as before.
+export function toolResultContent(result) {
+  if (result && typeof result === "object" && result.__imageBlock) {
+    return [
+      { type: "text", text: result.note || "Image loaded into view." },
+      result.__imageBlock,
+    ];
+  }
+  return typeof result === "string" ? result : JSON.stringify(result);
+}
+
 export function executeTool(name, input, discordClient, callerAgent) {
   switch (name) {
     case "bash": {
@@ -338,6 +360,28 @@ export function executeTool(name, input, discordClient, callerAgent) {
     case "read_file": {
       try {
         return { success: true, content: readFileSync(input.path, "utf8") };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+    case "view_image": {
+      try {
+        const buf = readFileSync(input.path);
+        let mediaType = null;
+        if (buf[0] === 0xff && buf[1] === 0xd8) mediaType = "image/jpeg";
+        else if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) mediaType = "image/png";
+        else if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) mediaType = "image/gif";
+        else if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) mediaType = "image/webp";
+        if (!mediaType) return { success: false, error: "Not a recognized image (png/jpeg/gif/webp): " + input.path };
+        // Anthropic caps images ~5MB after base64; keep raw under ~3.7MB.
+        if (buf.length > 3.75 * 1024 * 1024) {
+          return { success: false, error: "Image too large (" + Math.round(buf.length / 1024) + "KB). Max ~3.7MB. Resize it first (e.g. `convert in.jpg -resize 1600x1600 out.jpg`) then view the smaller copy." };
+        }
+        return {
+          success: true,
+          note: "Image " + input.path + " (" + mediaType + ", " + Math.round(buf.length / 1024) + "KB) loaded below.",
+          __imageBlock: { type: "image", source: { type: "base64", media_type: mediaType, data: buf.toString("base64") } },
+        };
       } catch (err) {
         return { success: false, error: err.message };
       }

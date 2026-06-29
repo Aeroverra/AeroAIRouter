@@ -1,6 +1,6 @@
 import { emoji } from "../persona.js";
 import { getClient, getMetadata, BILLING_SYSTEM_BLOCK, forceRefresh } from "../ai/client.js";
-import { toolSchemas, executeTool } from "../tools/definitions.js";
+import { toolSchemas, executeTool, toolResultContent } from "../tools/definitions.js";
 import { buildStableSystemPrompt } from "../memory/loader.js";
 import { randomUUID } from "crypto";
 import { writeFileSync, readFileSync, readdirSync, mkdirSync, existsSync, unlinkSync } from "fs";
@@ -371,7 +371,7 @@ async function runAgent(agent, thread) {
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolCall.id,
-        content: typeof result === "string" ? result : JSON.stringify(result),
+        content: toolResultContent(result),
       });
     }
 

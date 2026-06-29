@@ -1,7 +1,7 @@
 import { emoji } from "../persona.js";
 import { getClient, getMetadata, BILLING_SYSTEM_BLOCK, forceRefresh } from "./client.js";
 import { pickModel, isComplex } from "./model-router.js";
-import { toolSchemas, executeTool, setPendingMessage, isExtraTool, getToolTrust } from "../tools/definitions.js";
+import { toolSchemas, executeTool, setPendingMessage, isExtraTool, getToolTrust, toolResultContent } from "../tools/definitions.js";
 import { buildStableSystemPrompt } from "../memory/loader.js";
 import { fetchRecentMessages } from "../discord/history.js";
 import { hasResponded, markResponded } from "../tools/responded-cache.js";
@@ -238,6 +238,30 @@ export function buildMessagesWithAttachments(history, attachments, textContent) 
   return messages;
 }
 
+// Images are only worth keeping as real vision blocks for a while: cap how many
+// of the most recent images stay hydrated in history. Older image blocks are
+// collapsed to a short text marker so the model still knows an image was there,
+// without paying the token + on-disk cost of every image ever posted.
+const MAX_HISTORY_IMAGES = config.ai.maxHistoryImages || 4;
+
+function enforceImageBudget(history) {
+  let budget = MAX_HISTORY_IMAGES;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    if (!msg || !Array.isArray(msg.content)) continue;
+    let changed = false;
+    const content = msg.content.map((block) => {
+      if (block && block.type === "image") {
+        if (budget > 0) { budget--; return block; }
+        changed = true;
+        return { type: "text", text: "[earlier image attachment — no longer in view]" };
+      }
+      return block;
+    });
+    if (changed) history[i] = { role: msg.role, content };
+  }
+}
+
 // Build the system prompt array with cache_control on the stable portion.
 // Structure: [billing_header, stable_prompt (CACHED), dynamic_context]
 // The cache breakpoint on the stable prompt means the ~15KB of soul/memory/rules
@@ -394,7 +418,7 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolCall.id,
-        content: typeof result === "string" ? result : JSON.stringify(result),
+        content: toolResultContent(result),
       });
     }
 
@@ -460,12 +484,20 @@ export async function handleMessage(content, authorId, channel, author, message,
   }
 
   const textContent = "[" + (author.displayName || author.username) + "]: " + content;
-  history.push({ role: "user", content: textContent });
+  // Persist images as real vision blocks (not just a text description) so later
+  // turns that refer back to an earlier image can still see it. enforceImageBudget
+  // caps how many recent images stay hydrated.
+  const userContent = attachments.length > 0
+    ? [...attachments, { type: "text", text: textContent }]
+    : textContent;
+  history.push({ role: "user", content: userContent });
+  enforceImageBudget(history);
   trimHistory(history, channel.id);
   historyTimestamps.set(channel.id, Date.now());
 
-  // Freeze message snapshot IMMEDIATELY before any async operations.
-  const frozenMessages = buildMessagesWithAttachments([...history], attachments, textContent);
+  // Freeze message snapshot IMMEDIATELY before any async operations. The current
+  // turn's images already live in history (above), so no re-injection is needed.
+  const frozenMessages = [...history];
 
   const bgCount = (activeBackgroundTasks.get(channel.id)?.size || 0) + getActiveAgents().size;
   console.log("[ai] " + (author.displayName || author.username) + " in #" + channel.name + ": model=" + model + ", trust=" + trust + ", tools=" + tools.length + ", images=" + attachments.length + ", bgTasks=" + bgCount);
@@ -567,7 +599,7 @@ export async function handleMessage(content, authorId, channel, author, message,
       firstToolResults.push({
         type: "tool_result",
         tool_use_id: toolCall.id,
-        content: typeof result === "string" ? result : JSON.stringify(result),
+        content: toolResultContent(result),
       });
     }
 
