@@ -179,12 +179,13 @@ function ChannelsEditor({ path, value }) {
   const [error, setError] = useState(null);
   const [gi, setGi] = useState("");
   const [ci, setCi] = useState("");
+  const [botId, setBotId] = useState(null);
 
   function load(force) {
     if (loading) return;
     if (guilds && !force) return;
     setLoading(true); setError(null);
-    api("GET", "/api/discord/channels").then((r) => { S.discordChannels.value = r.guilds || []; setGuilds(r.guilds || []); setLoading(false); })
+    api("GET", "/api/discord/channels").then((r) => { S.discordChannels.value = r.guilds || []; setGuilds(r.guilds || []); setBotId(r.botId || null); setLoading(false); })
       .catch((ex) => { setError(ex.message); setLoading(false); });
   }
   useEffect(() => { if (!guilds) load(false); }, []);
@@ -198,6 +199,13 @@ function ChannelsEditor({ path, value }) {
   const groups = new Map();
   resolved.forEach((r, idx) => { const k = r.guild || "Other / not loaded"; if (!groups.has(k)) groups.set(k, []); groups.get(k).push({ r, idx }); });
   const selGuild = guilds && gi !== "" ? guilds[Number(gi)] : null;
+  const inviteUrl = (perms) => `https://discord.com/oauth2/authorize?client_id=${botId}&scope=bot&permissions=${perms}`;
+  const InviteButtons = ({ small }) => !botId ? null : (
+    <div class="row" style={small ? "" : "margin-top:10px"}>
+      <a class={`btn btn-primary ${small ? "btn-sm" : ""}`} href={inviteUrl(8)} target="_blank" rel="noopener">Invite bot (Administrator)</a>
+      <a class={`btn btn-ghost ${small ? "btn-sm" : ""}`} href={inviteUrl(117824)} target="_blank" rel="noopener">Invite (messaging only)</a>
+    </div>
+  );
 
   return (
     <div>
@@ -221,16 +229,20 @@ function ChannelsEditor({ path, value }) {
       {error && <p class="field-err">Couldn't load channels: {error}</p>}
 
       {guilds && guilds.length ? (
-        <div class="picker">
-          <Select value={gi} options={[["", "— server —"], ...guilds.map((g, i) => [String(i), g.guildName])]} onInput={(v) => { setGi(v); setCi(""); }} />
-          <Select value={ci} options={[["", "— channel —"], ...(selGuild ? selGuild.channels.filter((ch) => !rows.some((r) => r.id === ch.id)).map((ch) => [ch.id, "#" + ch.name]) : [])]} onInput={setCi} />
-          <Btn variant="secondary" size="sm" icon="plus" onClick={() => { if (selGuild && ci && !rows.some((r) => r.id === ci)) { const ch = selGuild.channels.find((c) => c.id === ci); commit([...rows, { id: ci, name: ch ? ch.name : "", guild: selGuild.guildName, mode: "addressed", respondToBots: false }]); setCi(""); } }}>Add channel</Btn>
-          <Btn variant="ghost" size="sm" onClick={() => load(true)}>↻ Refresh</Btn>
+        <div>
+          <div class="picker">
+            <Select value={gi} options={[["", "— server —"], ...guilds.map((g, i) => [String(i), g.guildName])]} onInput={(v) => { setGi(v); setCi(""); }} />
+            <Select value={ci} options={[["", "— channel —"], ...(selGuild ? selGuild.channels.filter((ch) => !rows.some((r) => r.id === ch.id)).map((ch) => [ch.id, "#" + ch.name]) : [])]} onInput={setCi} />
+            <Btn variant="secondary" size="sm" icon="plus" onClick={() => { if (selGuild && ci && !rows.some((r) => r.id === ci)) { const ch = selGuild.channels.find((c) => c.id === ci); commit([...rows, { id: ci, name: ch ? ch.name : "", guild: selGuild.guildName, mode: "addressed", respondToBots: false }]); setCi(""); } }}>Add channel</Btn>
+            <Btn variant="ghost" size="sm" onClick={() => load(true)}>↻ Refresh</Btn>
+          </div>
+          {botId && <p class="hint" style="margin-top:10px">Add the bot to another server: <a href={inviteUrl(8)} target="_blank" rel="noopener">invite (Administrator)</a> · <a href={inviteUrl(117824)} target="_blank" rel="noopener">invite (messaging only)</a></p>}
         </div>
       ) : guilds && !guilds.length && !loading ? (
         <div class="card card-pad" style="margin-top:12px">
           <p style="font-weight:600;margin-bottom:4px">The bot isn't in any Discord server yet.</p>
-          <p class="hint">Invite it to a server, then hit Refresh. In the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">Developer Portal ↗</a> → your app → OAuth2 → URL Generator: tick <b>bot</b>, pick the channel permissions, open the generated URL, and add it to your server. Also enable <b>MESSAGE CONTENT INTENT</b> under Bot → Privileged Gateway Intents.</p>
+          <p class="hint">Invite it with a button below (opens Discord — pick the server and authorize), then hit Refresh. <b>Administrator</b> grants full access; <b>messaging only</b> is the minimal set to read/send in channels. Also enable <b>MESSAGE CONTENT INTENT</b> under your app → Bot → Privileged Gateway Intents in the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">Developer Portal ↗</a>.</p>
+          <InviteButtons />
           <div class="picker"><Btn variant="secondary" size="sm" onClick={() => load(true)}>↻ Refresh</Btn></div>
         </div>
       ) : !loading && (

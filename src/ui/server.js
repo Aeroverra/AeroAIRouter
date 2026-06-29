@@ -258,7 +258,15 @@ export function createApp() {
     const token = process.env.DISCORD_TOKEN || io.readSecretsMap().DISCORD_TOKEN;
     if (!token) return res.status(400).json({ error: "DISCORD_TOKEN not set" });
     try {
-      res.json({ guilds: await fetchGuildChannels(token) });
+      const guilds = await fetchGuildChannels(token);
+      // The bot's user id == its OAuth client id; the UI uses it to build an
+      // invite link so the user can add the bot to a server right from the panel.
+      let botId = null;
+      try {
+        const me = await fetch("https://discord.com/api/v10/users/@me", { headers: { Authorization: "Bot " + token }, signal: AbortSignal.timeout(8000) });
+        if (me.ok) botId = (await me.json()).id;
+      } catch {}
+      res.json({ guilds, botId });
     } catch (err) {
       res.status(502).json({ error: err.message });
     }
