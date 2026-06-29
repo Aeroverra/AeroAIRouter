@@ -1,7 +1,9 @@
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
+import { DATA_DIR } from "../config/paths.js";
 
-const CACHE_FILE = join(import.meta.dirname, "..", "..", "data", "responded-cache.json");
+// State lives in AIROUTER_HOME/data (NOT the install dir) so fresh clones work.
+const CACHE_FILE = join(DATA_DIR, "responded-cache.json");
 const MAX_ENTRIES = 500;
 const MAX_AGE_MS = 48 * 60 * 60 * 1000;
 
@@ -24,6 +26,7 @@ export function loadCache() {
 }
 
 export function saveCache() {
+  mkdirSync(DATA_DIR, { recursive: true });
   const obj = Object.fromEntries(cache);
   writeFileSync(CACHE_FILE, JSON.stringify(obj), "utf8");
 }

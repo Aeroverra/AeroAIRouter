@@ -1,8 +1,10 @@
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
+import { DATA_DIR } from "../config/paths.js";
 
-const QUEUE_FILE = join(import.meta.dirname, "..", "..", "data", "task-queue.json");
+// State lives in AIROUTER_HOME/data (NOT the install dir) so fresh clones work.
+const QUEUE_FILE = join(DATA_DIR, "task-queue.json");
 
 function loadQueue() {
   if (!existsSync(QUEUE_FILE)) return [];
@@ -14,6 +16,7 @@ function loadQueue() {
 }
 
 function saveQueue(tasks) {
+  mkdirSync(DATA_DIR, { recursive: true });
   writeFileSync(QUEUE_FILE, JSON.stringify(tasks, null, 2), "utf8");
 }
 
