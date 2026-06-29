@@ -227,6 +227,12 @@ function ChannelsEditor({ path, value }) {
           <Btn variant="secondary" size="sm" icon="plus" onClick={() => { if (selGuild && ci && !rows.some((r) => r.id === ci)) { const ch = selGuild.channels.find((c) => c.id === ci); commit([...rows, { id: ci, name: ch ? ch.name : "", guild: selGuild.guildName, mode: "addressed", respondToBots: false }]); setCi(""); } }}>Add channel</Btn>
           <Btn variant="ghost" size="sm" onClick={() => load(true)}>↻ Refresh</Btn>
         </div>
+      ) : guilds && !guilds.length && !loading ? (
+        <div class="card card-pad" style="margin-top:12px">
+          <p style="font-weight:600;margin-bottom:4px">The bot isn't in any Discord server yet.</p>
+          <p class="hint">Invite it to a server, then hit Refresh. In the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">Developer Portal ↗</a> → your app → OAuth2 → URL Generator: tick <b>bot</b>, pick the channel permissions, open the generated URL, and add it to your server. Also enable <b>MESSAGE CONTENT INTENT</b> under Bot → Privileged Gateway Intents.</p>
+          <div class="picker"><Btn variant="secondary" size="sm" onClick={() => load(true)}>↻ Refresh</Btn></div>
+        </div>
       ) : !loading && (
         <div class="picker"><Btn variant="secondary" size="sm" onClick={() => load(true)}>{error ? "Retry" : "Load servers from Discord"}</Btn></div>
       )}
