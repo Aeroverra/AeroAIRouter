@@ -9,7 +9,7 @@ function buildChannelMap() {
   const chans = Array.isArray(config.discord.channels) ? config.discord.channels : null;
   if (chans) {
     for (const c of chans) {
-      if (c && c.id) map.set(String(c.id), { mode: c.mode || "addressed", respondToBots: !!c.respondToBots });
+      if (c && c.id) map.set(String(c.id), { mode: c.mode || "addressed", respondToBots: !!c.respondToBots, respondToOwner: c.respondToOwner !== false });
     }
     return map;
   }
@@ -53,6 +53,10 @@ export function shouldRespond(message, botId) {
 
   if (isDuplicate(message.author.id, message.content)) return false;
 
+  // Owner: a per-channel opt-in to always answer the owner regardless of how the
+  // message is addressed (its own toggle, mirroring respondToBots). On by default.
+  if (ch.respondToOwner && message.author.id === config.discord.ownerId) return true;
+
   if (ch.mode === "all") return true;
 
   const mentioned = message.mentions.users.has(botId);
@@ -60,9 +64,8 @@ export function shouldRespond(message, botId) {
   // "mention" mode: ONLY a real @-mention of the bot — nothing else.
   if (ch.mode === "mention") return mentioned;
 
-  // "addressed" mode: reply when clearly directed at the bot (@, owner, wake word).
+  // "addressed" mode: reply when clearly directed at the bot (@, wake word).
   if (mentioned) return true;
-  if (message.author.id === config.discord.ownerId) return true;
   if (message.reference && !mentioned) return false; // reply to someone else
   if (message.mentions.users.size > 0 && !mentioned) return false; // addressing others
   const wakeWord = (config.discord.wakeWord || "").toLowerCase();

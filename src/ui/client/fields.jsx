@@ -191,7 +191,7 @@ function ChannelsEditor({ path, value }) {
   useEffect(() => { if (!guilds) load(false); }, []);
 
   function resolve(id) { if (!guilds) return null; for (const g of guilds) for (const ch of g.channels) if (ch.id === id) return { name: ch.name, guild: g.guildName }; return null; }
-  function commit(next) { setRows(next); setPath(S.config.value, path, next.filter((r) => r.id).map((r) => ({ id: r.id, name: r.name, guild: r.guild, mode: r.mode || "addressed", respondToBots: !!r.respondToBots }))); markSettingsDirty(); }
+  function commit(next) { setRows(next); setPath(S.config.value, path, next.filter((r) => r.id).map((r) => ({ id: r.id, name: r.name, guild: r.guild, mode: r.mode || "addressed", respondToBots: !!r.respondToBots, respondToOwner: r.respondToOwner !== false }))); markSettingsDirty(); }
   const upd = (i, k, v) => { const n = rows.map((r) => ({ ...r })); n[i][k] = v; commit(n); };
 
   // resolve names + group
@@ -217,6 +217,7 @@ function ChannelsEditor({ path, value }) {
               <div class="erow">
                 <div class="grow"><strong>{r.name ? "#" + r.name : r.id}</strong> <span class="faint caption">({r.id})</span></div>
                 <Select value={r.mode || "addressed"} options={MODE_OPTS} onInput={(v) => upd(idx, "mode", v)} />
+                <Switch size="sm" checked={r.respondToOwner !== false} onChange={(v) => upd(idx, "respondToOwner", v)} label="answer owner" />
                 <Switch size="sm" checked={!!r.respondToBots} onChange={(v) => upd(idx, "respondToBots", v)} label="answer bots" />
                 <IconBtn name="trash" label="Remove" onClick={() => commit(rows.filter((_, j) => j !== idx))} />
               </div>
