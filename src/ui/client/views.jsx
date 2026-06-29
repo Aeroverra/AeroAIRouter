@@ -62,7 +62,7 @@ export function SetupWizard({ status }) {
       <p class="muted" style="margin-bottom:10px">Create a bot and paste its token. {link("Open the Discord Developer Portal ↗", "https://discord.com/developers/applications")}</p>
       <ol class="wiz-list">
         <li>New Application → Bot → Reset Token → Copy.</li>
-        <li>Bot → Privileged Gateway Intents → enable MESSAGE CONTENT INTENT.</li>
+        <li>Bot → Privileged Gateway Intents → enable all three: <b>Presence</b>, <b>Server Members</b>, and <b>Message Content</b> (required, or the bot can't connect).</li>
         <li>OAuth2 → URL Generator → scope "bot", then invite it to your server.</li>
       </ol>
       <Field label="Discord bot token" hint="Click Test to verify it works.">

@@ -241,7 +241,7 @@ function ChannelsEditor({ path, value }) {
       ) : guilds && !guilds.length && !loading ? (
         <div class="card card-pad" style="margin-top:12px">
           <p style="font-weight:600;margin-bottom:4px">The bot isn't in any Discord server yet.</p>
-          <p class="hint">Invite it with a button below (opens Discord — pick the server and authorize), then hit Refresh. <b>Administrator</b> grants full access; <b>messaging only</b> is the minimal set to read/send in channels. Also enable <b>MESSAGE CONTENT INTENT</b> under your app → Bot → Privileged Gateway Intents in the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">Developer Portal ↗</a>.</p>
+          <p class="hint">Invite it with a button below (opens Discord — pick the server and authorize), then hit Refresh. <b>Administrator</b> grants full access; <b>messaging only</b> is the minimal set to read/send in channels. Also enable all three <b>Privileged Gateway Intents</b> (Presence, Server Members, Message Content) under your app → Bot in the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">Developer Portal ↗</a> — the bot can't connect without them.</p>
           <InviteButtons />
           <div class="picker"><Btn variant="secondary" size="sm" onClick={() => load(true)}>↻ Refresh</Btn></div>
         </div>
