@@ -9,7 +9,7 @@ import { getDiscordClient } from "../discord/client.js";
 import config from "../config/index.js";
 import { getTrustLevel as _getTrustLevel } from "../discord/trust.js";
 import { getActiveAgents, sanitizeForDiscord } from "../discord/subagent.js";
-import { compactMessages } from "./context.js";
+import { compactMessages, sanitizeMessageSequence } from "./context.js";
 import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
 import { join } from "path";
 
@@ -324,6 +324,10 @@ function logCacheUsage(response, label) {
 }
 
 async function streamApiCall(client, params) {
+  if (params && Array.isArray(params.messages)) {
+    const fixes = sanitizeMessageSequence(params.messages);
+    if (fixes > 0) console.log("[ai] sanitizeMessageSequence: removed " + fixes + " orphaned/invalid block(s) before send");
+  }
   try {
     const stream = client.messages.stream(params);
     return await stream.finalMessage();
@@ -340,11 +344,30 @@ async function streamApiCall(client, params) {
   }
 }
 
+// Detect when the model has ended its turn by asking permission to keep going
+// mid-task (instead of just finishing). Used to auto-continue background tasks so
+// they actually complete instead of stalling on "want me to continue?".
+const MAX_AUTO_CONTINUE = 14;
+function looksLikeMidTaskYield(text) {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  const patterns = [
+    "want me to continue", "want me to keep", "want me to paginate", "want me to go",
+    "should i continue", "shall i continue", "ask me to continue", "do you want me",
+    "let me know if you want", "i can continue", "ready to continue", "keep paginating",
+    "keep going?", "continue?", "more api call", "more pages", "remaining pages",
+    "i didn't get", "didn't get the full", "to hit 100", "the remaining", "i have the pagination",
+    "would need", "i can keep", "want me to fetch",
+  ];
+  return patterns.some((x) => t.includes(x));
+}
+
 async function runToolLoop(client, messages, tools, systemBlocks, model, channel, taskMeta, progressMsg) {
   let sentToChannel = false;
   let progressLines = [];
   let lastProgressEdit = 0;
   let toolCallCount = 0;
+  let autoContinueCount = 0;
   const typingInterval = setInterval(() => {
     channel.sendTyping().catch(() => {});
   }, 8000);
@@ -385,6 +408,16 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
 
     if (response.stop_reason === "end_turn" || toolBlocks.length === 0) {
       const reply = textBlocks.map((b) => b.text).join("\n");
+      // Background tasks must finish, not stall asking permission. If the model
+      // ended its turn by asking to continue mid-task, inject a 'continue' nudge
+      // and keep looping (up to a cap) instead of returning the partial result.
+      if (taskMeta && autoContinueCount < MAX_AUTO_CONTINUE && looksLikeMidTaskYield(reply)) {
+        autoContinueCount++;
+        console.log("[ai] auto-continue " + autoContinueCount + "/" + MAX_AUTO_CONTINUE + " (model tried to yield mid-task)");
+        messages.push({ role: "assistant", content: response.content });
+        messages.push({ role: "user", content: "Continue and FINISH the task completely right now. You already have everything you need, including any pagination cursor. Do NOT stop to ask permission, do NOT summarize partial progress, do NOT check in \u2014 keep calling tools until the full requested deliverable is done (the exact count requested), then output the single final complete result. This is an automated continuation; asking to continue again is a failure." });
+        continue;
+      }
       return { text: reply, error: null, sentToChannel };
     }
 
