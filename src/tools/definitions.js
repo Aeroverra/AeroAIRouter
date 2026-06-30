@@ -62,7 +62,7 @@ export const toolSchemas = [
       type: "object",
       properties: {
         command: { type: "string", description: "The bash command to execute" },
-        timeout: { type: "number", description: "Timeout in ms (default 1800000, max 1800000)" },
+        timeout: { type: "number", description: "Timeout in ms (default 120000 = 2 min, max 1800000 = 30 min). Pass a larger value only for genuinely long-running commands." },
       },
       required: ["command"],
     },
@@ -333,19 +333,34 @@ export function executeTool(name, input, discordClient, callerAgent) {
       if (!review.approved) {
         return { success: false, blocked: true, reason: review.reason, reviewer: review.reviewer };
       }
-      const timeout = Math.min(input.timeout || 1800000, 1800000);
+      // Default 2 min so a hung command (infinite loop, or a script/REPL blocking
+      // on stdin) self-recovers fast instead of wedging the task for the old 30 min.
+      // The model can pass an explicit larger timeout (up to 30 min) for genuinely
+      // long jobs. detached:true + process.kill(-pid) kills the whole process group
+      // so forked children (python/curl) die too, not just the bash wrapper.
+      const timeout = Math.min(input.timeout || 120000, 1800000);
       return new Promise((resolve) => {
         var stdoutChunks = [];
         var stderrChunks = [];
-        var proc = spawn("/bin/bash", ["-c", input.command], { stdio: ["ignore", "pipe", "pipe"] });
+        var timedOut = false;
+        var proc = spawn("/bin/bash", ["-c", input.command], { stdio: ["ignore", "pipe", "pipe"], detached: true });
+        function killTree(sig) { try { process.kill(-proc.pid, sig); } catch (e) { try { proc.kill(sig); } catch (e2) {} } }
         proc.stdout.on("data", function(chunk) { stdoutChunks.push(chunk); });
         proc.stderr.on("data", function(chunk) { stderrChunks.push(chunk); });
-        var timer = setTimeout(function() { proc.kill("SIGTERM"); }, timeout);
+        var hardTimer = null;
+        var timer = setTimeout(function() {
+          timedOut = true;
+          killTree("SIGTERM");
+          hardTimer = setTimeout(function() { killTree("SIGKILL"); }, 3000);
+        }, timeout);
         proc.on("close", function(code) {
           clearTimeout(timer);
+          if (hardTimer) clearTimeout(hardTimer);
           var stdout = Buffer.concat(stdoutChunks).toString("utf8");
           var stderr = Buffer.concat(stderrChunks).toString("utf8");
-          if (code !== 0 && code !== null) {
+          if (timedOut) {
+            resolve({ success: false, timedOut: true, output: stdout, error: "Command exceeded the " + timeout + "ms timeout and was killed. It almost certainly hung \u2014 an infinite loop, or a script/REPL waiting on stdin. Do NOT blindly re-run the same thing: fix the script so it terminates (bound your loops, read input from a file instead of stdin), or if the work is genuinely long-running pass an explicit larger `timeout` (up to 1800000)." });
+          } else if (code !== 0 && code !== null) {
             resolve({ success: false, output: stdout, error: stderr || "Exit code " + code, exitCode: code });
           } else {
             resolve({ success: true, output: stdout });
@@ -353,6 +368,7 @@ export function executeTool(name, input, discordClient, callerAgent) {
         });
         proc.on("error", function(err) {
           clearTimeout(timer);
+          if (hardTimer) clearTimeout(hardTimer);
           resolve({ success: false, error: err.message, exitCode: -1 });
         });
       });
