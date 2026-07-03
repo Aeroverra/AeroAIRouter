@@ -8,6 +8,8 @@ import { Btn, IconBtn, Icon, Switch, Spinner, ToastHost, DialogHost } from "./ui
 import { Login, SetupWizard, Dashboard, SchemaSection, RawJson, restartBot, changePassword } from "./views.jsx";
 import { PluginsList, PluginConfig, McpView } from "./plugins.jsx";
 import { MemoriesView, SkillsView } from "./brain.jsx";
+import { TasksView } from "./tasks.jsx";
+import { SchedulerView } from "./scheduler.jsx";
 
 const SECTION_ICONS = { essentials: "cog", claude: "spark", discord: "discord", persona: "persona", review: "review", update: "update", network: "network" };
 
@@ -108,6 +110,8 @@ function Sidebar({ route }) {
       {item("__plugins", "Plugins", "plugins")}
       {onPlugins && S.plugins.value.filter((p) => !p.uninstalled && ((p.configSchema || []).length || p.ui || p.hasCheckToken)).map((p) => item("__plugin:" + p.name, p.label || p.name, null, true))}
       {item("__mcp", "MCP Servers", "mcp")}
+      {item("__tasks", "Tasks", "note")}
+      {item("__scheduler", "Scheduler", "update")}
       <div class="nav-group">System</div>
       {inGroup("System").map((s) => item(s.id, s.title, SECTION_ICONS[s.id]))}
       {item("__raw", "Raw JSON", "raw")}
@@ -123,6 +127,8 @@ function Content({ route }) {
   if (route === "__plugins") return <PluginsList navigate={navigate} />;
   if (route.startsWith("__plugin:")) return <PluginConfig name={route.slice("__plugin:".length)} navigate={navigate} />;
   if (route === "__mcp") return <McpView />;
+  if (route === "__tasks") return <TasksView />;
+  if (route === "__scheduler") return <SchedulerView />;
   if (route === "__raw") return <RawJson />;
   const section = S.schema.value.find((s) => s.id === route);
   if (!section) return null;

@@ -16,6 +16,7 @@ import { SECTIONS } from "./schema.js";
 import { discoverPlugins, isPluginEnabled, isPluginUninstalled } from "../plugins/registry.js";
 import * as memstore from "../memory/store.js";
 import * as skills from "../skills/loader.js";
+import * as taskstore from "../tools/task-store.js";
 
 // Live MCP status written by the bot process at startup (DATA_DIR/mcp-status.json).
 function readMcpStatus() {
@@ -586,6 +587,34 @@ export function createApp() {
     try { memstore.deleteMemory(req.params.name); res.json({ ok: true }); }
     catch (err) { res.status(400).json({ error: err.message }); }
   });
+
+  // ---- tasks (executable units the bot/user can run; AIROUTER_HOME/data/tasks.json) ----
+  app.get("/api/tasks", requireAuth, (req, res) => res.json({ tasks: taskstore.listTasks() }));
+  app.post("/api/tasks", requireAuth, requireCsrf, (req, res) => res.json({ task: taskstore.taskSummary(taskstore.createTask(req.body || {})) }));
+  app.put("/api/tasks/:id", requireAuth, requireCsrf, (req, res) => {
+    const t = taskstore.updateTask(req.params.id, req.body || {});
+    if (!t) return res.status(404).json({ error: "task not found" });
+    res.json({ task: taskstore.taskSummary(t) });
+  });
+  app.delete("/api/tasks/:id", requireAuth, requireCsrf, (req, res) => res.json({ ok: taskstore.deleteTask(req.params.id) }));
+  app.post("/api/tasks/:id/duplicate", requireAuth, requireCsrf, (req, res) => {
+    const t = taskstore.duplicateTask(req.params.id);
+    if (!t) return res.status(404).json({ error: "task not found" });
+    res.json({ task: taskstore.taskSummary(t) });
+  });
+  // "run now" is enqueued for the bot process (the UI can't execute tasks itself).
+  app.post("/api/tasks/:id/run", requireAuth, requireCsrf, (req, res) => { taskstore.enqueueRun("task", req.params.id); res.json({ ok: true, queued: true }); });
+
+  // ---- schedules (fire tasks on a cron/one-off; times stored/run in UTC) ----
+  app.get("/api/schedules", requireAuth, (req, res) => res.json({ schedules: taskstore.listSchedules() }));
+  app.post("/api/schedules", requireAuth, requireCsrf, (req, res) => res.json({ schedule: taskstore.createSchedule(req.body || {}) }));
+  app.put("/api/schedules/:id", requireAuth, requireCsrf, (req, res) => {
+    const s = taskstore.updateSchedule(req.params.id, req.body || {});
+    if (!s) return res.status(404).json({ error: "schedule not found" });
+    res.json({ schedule: s });
+  });
+  app.delete("/api/schedules/:id", requireAuth, requireCsrf, (req, res) => res.json({ ok: taskstore.deleteSchedule(req.params.id) }));
+  app.post("/api/schedules/:id/run", requireAuth, requireCsrf, (req, res) => { taskstore.enqueueRun("schedule", req.params.id); res.json({ ok: true, queued: true }); });
 
   // ---- skills (on-demand instruction packs; AIROUTER_HOME/skills/<slug>/SKILL.md) ----
   app.get("/api/skills", requireAuth, (req, res) => {

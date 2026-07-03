@@ -11,7 +11,9 @@ import { spawnSubagent, cancelAgent, messageAgent, listAgents } from "../discord
 import { speak, joinVoice, leaveVoice, isInVoice } from "../discord/voice.js";
 import { setTrustOverride, clearTrustOverride, getOverrides } from "../discord/trust.js";
 import { webSearch, webFetch } from "./web.js";
-import { createJob, listJobs, deleteJob, toggleJob } from "./scheduler.js";
+// aliased to avoid clashing with task-queue.js's addTask/listTasks/updateTask/deleteTask (a separate TODO list)
+import { createTask as createXTask, updateTask as updateXTask, deleteTask as deleteXTask, listTasks as listXTasks, createSchedule, deleteSchedule, listSchedules } from "./task-store.js";
+import { runTask } from "./tasks.js";
 import { selectMemories, readMemory, writeMemory, appendMemory, deleteMemory, safeMemoryName } from "../memory/store.js";
 import { discoverSkills, readSkill, isSkillEnabled } from "../skills/loader.js";
 import config from "../config/index.js";
@@ -285,18 +287,36 @@ export const toolSchemas = [
     },
   },
   {
-    name: "cron",
-    description: "Schedule recurring or one-time jobs. Jobs fire as agent turns and deliver results to a Discord channel.",
+    name: "task",
+    description: "Create and run reusable TASKS. A task is a named executable unit that runs either as an 'agent' turn (a prompt you write — it may or may not send a message) or a 'command' (a shell command). Use for anything you'll trigger again or schedule (e.g. 'check OSRS xp and post to #channel only if someone gained'). Actions: create, run, list, update, delete.",
     input_schema: {
       type: "object",
       properties: {
-        action: { type: "string", enum: ["create", "list", "delete", "enable", "disable"], description: "Action to take" },
-        name: { type: "string", description: "Human-readable job name (for create)" },
-        type: { type: "string", enum: ["interval", "once"], description: "interval = recurring, once = fire once at a specific time" },
-        schedule: { type: "string", description: "For interval: '30m', '6h', '1d'. For once: ISO 8601 timestamp." },
-        task: { type: "string", description: "The prompt/task to execute when the job fires (runs as an agent turn)" },
-        channel_id: { type: "string", description: "Discord channel to deliver results to" },
-        job_id: { type: "string", description: "Job ID (for delete/enable/disable)" },
+        action: { type: "string", enum: ["create", "run", "list", "update", "delete"] },
+        name: { type: "string", description: "Task name (create)" },
+        description: { type: "string" },
+        type: { type: "string", enum: ["agent", "command"], description: "agent = run the body as a prompt; command = run the body as a shell command. Default agent." },
+        body: { type: "string", description: "The prompt (agent) or shell command (command) to run" },
+        channel_id: { type: "string", description: "Channel for output / agent context" },
+        post_output: { type: "boolean", description: "Post the result to the channel (default true). Set false for silent tasks." },
+        task_id: { type: "string", description: "Task id (run/update/delete)" },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "schedule",
+    description: "Schedule a TASK to run automatically. Recurring uses a 5-field cron expression in UTC (minute hour day-of-month month day-of-week); one-off uses an ISO-8601 UTC timestamp. All times are UTC. Actions: create, list, delete.",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["create", "list", "delete"] },
+        task_id: { type: "string", description: "The task to run (create)" },
+        kind: { type: "string", enum: ["recurring", "once"], description: "Default recurring." },
+        cron: { type: "string", description: "5-field cron in UTC (recurring), e.g. '0 22 * * 1-5' = 22:00 UTC on weekdays" },
+        run_at: { type: "string", description: "ISO-8601 UTC timestamp (once)" },
+        enabled: { type: "boolean" },
+        schedule_id: { type: "string", description: "Schedule id (delete)" },
       },
       required: ["action"],
     },
@@ -561,30 +581,51 @@ export function executeTool(name, input, discordClient, callerAgent) {
         }
       })();
     }
-    case "cron": {
+    case "task": {
       switch (input.action) {
         case "create": {
-          if (!input.name || !input.schedule || !input.task || !input.channel_id) {
-            return { success: false, error: "name, schedule, task, and channel_id are required" };
-          }
-          return createJob(input.name, input.type || "interval", input.schedule, input.task, input.channel_id);
+          if (!input.name || !input.body) return { success: false, error: "name and body are required" };
+          const t = createXTask({ name: input.name, description: input.description, type: input.type, body: input.body, channelId: input.channel_id, postOutput: input.post_output });
+          return { success: true, task: { id: t.id, name: t.name, type: t.type } };
+        }
+        case "run": {
+          if (!input.task_id) return { success: false, error: "task_id required" };
+          return runTask(input.task_id, { source: "tool" });
         }
         case "list":
-          return { success: true, jobs: listJobs() };
+          return { success: true, tasks: listXTasks() };
+        case "update": {
+          if (!input.task_id) return { success: false, error: "task_id required" };
+          const patch = {};
+          for (const [k, c] of [["name", "name"], ["description", "description"], ["type", "type"], ["body", "body"], ["channelId", "channel_id"], ["postOutput", "post_output"]]) if (input[c] !== undefined) patch[k] = input[c];
+          return updateXTask(input.task_id, patch) ? { success: true } : { success: false, error: "task not found" };
+        }
         case "delete": {
-          if (!input.job_id) return { success: false, error: "job_id required" };
-          return deleteJob(input.job_id);
-        }
-        case "enable": {
-          if (!input.job_id) return { success: false, error: "job_id required" };
-          return toggleJob(input.job_id, true);
-        }
-        case "disable": {
-          if (!input.job_id) return { success: false, error: "job_id required" };
-          return toggleJob(input.job_id, false);
+          if (!input.task_id) return { success: false, error: "task_id required" };
+          return deleteXTask(input.task_id) ? { success: true } : { success: false, error: "task not found" };
         }
         default:
-          return { error: "Unknown action. Use create, list, delete, enable, or disable." };
+          return { error: "Unknown action. Use create, run, list, update, delete." };
+      }
+    }
+    case "schedule": {
+      switch (input.action) {
+        case "create": {
+          if (!input.task_id) return { success: false, error: "task_id required" };
+          const kind = input.kind === "once" ? "once" : "recurring";
+          if (kind === "once" && !input.run_at) return { success: false, error: "run_at (ISO UTC) required for a once schedule" };
+          if (kind === "recurring" && !input.cron) return { success: false, error: "cron (5-field UTC) required for a recurring schedule" };
+          const s = createSchedule({ taskId: input.task_id, kind, cron: input.cron, runAt: input.run_at, enabled: input.enabled });
+          return { success: true, schedule: { id: s.id, kind: s.kind } };
+        }
+        case "list":
+          return { success: true, schedules: listSchedules() };
+        case "delete": {
+          if (!input.schedule_id) return { success: false, error: "schedule_id required" };
+          return deleteSchedule(input.schedule_id) ? { success: true } : { success: false, error: "schedule not found" };
+        }
+        default:
+          return { error: "Unknown action. Use create, list, delete." };
       }
     }
     case "manage_memory": {

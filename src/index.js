@@ -11,6 +11,7 @@ import { loadPlugins } from "./plugins/loader.js";
 import { isPluginEnabled } from "./plugins/registry.js";
 import { startMcp } from "./mcp/client.js";
 import { setUpdateClient, startSelfUpdate, stopSelfUpdate } from "./tools/self-update.js";
+import { initScheduler, stopScheduler } from "./tools/scheduler.js";
 import { writeFileSync, readFileSync, existsSync, unlinkSync } from "fs";
 import { join } from "path";
 import config from "./config/index.js";
@@ -65,6 +66,7 @@ async function start() {
   startWatchdog();
   setUpdateClient(client);
   startSelfUpdate();
+  initScheduler(); // Tasks/Scheduler engine (needs the Discord client, so after startDiscord)
   const voiceOn = isPluginEnabled("voice", { enabledByDefault: false }, config) || !!(config.features && config.features.voice);
   if (voiceOn) {
     startVoiceMonitor();
@@ -94,6 +96,7 @@ async function shutdown(reason) {
   if (pruneInterval) clearInterval(pruneInterval);
   stopWatchdog();
   stopSelfUpdate();
+  stopScheduler();
   stopVoiceMonitor();
   stopWatching();
   await stopDiscord();
@@ -106,6 +109,7 @@ async function restart() {
   if (pruneInterval) clearInterval(pruneInterval);
   stopWatchdog();
   stopSelfUpdate();
+  stopScheduler();
   stopVoiceMonitor();
   stopWatching();
   await stopDiscord();

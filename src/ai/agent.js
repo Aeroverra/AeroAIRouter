@@ -223,7 +223,7 @@ export function filterToolsForTrust(trust) {
     // operator's credentials) unless the plugin/server marks them elevated/light.
     // manage_memory is owner-only: memories are injected into the system prompt,
     // so writing one can effectively steer the bot.
-    const denied = ["bash", "read_file", "list_files", "write_file", "get_credentials", "spawn_agent", "voice_control", "trust_manage", "cron", "discord_send", "manage_memory"];
+    const denied = ["bash", "read_file", "list_files", "write_file", "get_credentials", "spawn_agent", "voice_control", "trust_manage", "task", "schedule", "discord_send", "manage_memory"];
     return toolSchemas.filter((t) => {
       if (isExtraTool(t.name)) return getToolTrust(t.name) === "elevated" || getToolTrust(t.name) === "light";
       return !denied.includes(t.name);
