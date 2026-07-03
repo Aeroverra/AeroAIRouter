@@ -6,6 +6,7 @@ import { randomUUID } from "crypto";
 import config from "../config/index.js";
 import { DATA_DIR } from "../config/paths.js";
 import { sleepSync } from "../util/sleep.js";
+import { DEFAULT_HEADERS, DEFAULT_QUERY, DEFAULT_BILLING } from "./llm-defaults.js";
 
 const SESSION_ID = randomUUID();
 
@@ -162,26 +163,42 @@ export function forceRefresh() {
   return refreshToken();
 }
 
+// The active LLM profile's request customization (config.ai.providers[provider]).
+// Editable from the Claude tab in the config UI; empty => use the shipped defaults.
+function llmProfile() {
+  const provs = (config.ai && config.ai.providers) || {};
+  return provs[(config.ai && config.ai.provider) || "anthropic"] || {};
+}
+function profileHeaders() {
+  const p = llmProfile();
+  return (p.headers && Object.keys(p.headers).length) ? { ...p.headers } : { ...DEFAULT_HEADERS };
+}
+function profileQuery() {
+  const p = llmProfile();
+  return (p.query && Object.keys(p.query).length) ? { ...p.query } : { ...DEFAULT_QUERY };
+}
+
 export async function getClient() {
   if (MODE === "apikey") {
     if (client) return client;
-    client = new Anthropic({ apiKey: config.ai.anthropicApiKey });
+    // API-key mode is plain by default; only attach custom headers/query if the
+    // user has configured them (the CLI-impersonation defaults are OAuth-only).
+    const p = llmProfile();
+    const opts = { apiKey: config.ai.anthropicApiKey };
+    if (p.headers && Object.keys(p.headers).length) opts.defaultHeaders = { ...p.headers };
+    if (p.query && Object.keys(p.query).length) opts.defaultQuery = { ...p.query };
+    client = new Anthropic(opts);
     return client;
   }
 
   await ensureFreshToken();
   if (client) return client;
+  const headers = profileHeaders();
+  headers["x-claude-code-session-id"] = SESSION_ID; // dynamic, always injected
   client = new Anthropic({
     authToken: currentAccessToken,
-    defaultHeaders: {
-      "anthropic-dangerous-direct-browser-access": "true",
-      "anthropic-beta":
-        "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,web-search-2025-03-05",
-      "x-app": "cli",
-      "user-agent": "claude-cli/2.1.159 (external, sdk-cli)",
-      "x-claude-code-session-id": SESSION_ID,
-    },
-    defaultQuery: { beta: "true" },
+    defaultHeaders: headers,
+    defaultQuery: profileQuery(),
   });
   return client;
 }
@@ -203,7 +220,7 @@ export const BILLING_SYSTEM_BLOCK =
   MODE === "oauth"
     ? {
         type: "text",
-        text: "x-anthropic-billing-header: cc_version=2.1.159.286; cc_entrypoint=sdk-cli; cch=e2159;",
+        text: "x-anthropic-billing-header: " + (llmProfile().billingHeader || DEFAULT_BILLING),
       }
     : null;
 

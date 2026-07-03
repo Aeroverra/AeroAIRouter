@@ -27,6 +27,18 @@ export const SECTIONS = [
     ],
   },
   {
+    id: "claude",
+    title: "Claude",
+    group: "Setup",
+    help: "Claude / LLM request settings. The request headers & params are structured as per-provider profiles so other LLMs can be added later.",
+    fields: [
+      { path: "ai.auth.mode", label: "Auth mode", type: "select", options: ["auto", "apikey", "oauth"], help: "auto = use the API key if set, otherwise the OAuth token." },
+      { path: "ai.models.complex", label: "Model", type: "string", help: "e.g. claude-opus-4-8" },
+      { path: "ai.maxTokens", label: "Max output tokens", type: "number", advanced: true },
+      { path: "ai.providers.anthropic", label: "Request headers & params (Anthropic)", type: "llm", help: "Headers, query params, and the billing header sent with every Claude request. Edit / add / remove them; Restore defaults resets to what the bot ships with. (x-claude-code-session-id is added automatically per run.)" },
+    ],
+  },
+  {
     id: "discord",
     title: "Discord",
     group: "Setup",

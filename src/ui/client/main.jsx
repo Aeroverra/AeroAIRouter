@@ -9,7 +9,7 @@ import { Login, SetupWizard, Dashboard, SchemaSection, RawJson, restartBot, chan
 import { PluginsList, PluginConfig, McpView } from "./plugins.jsx";
 import { MemoriesView, SkillsView } from "./brain.jsx";
 
-const SECTION_ICONS = { essentials: "cog", discord: "discord", persona: "persona", review: "review", update: "update", network: "network" };
+const SECTION_ICONS = { essentials: "cog", claude: "spark", discord: "discord", persona: "persona", review: "review", update: "update", network: "network" };
 
 function App() {
   if (S.booting.value) return <div class="center-load"><Spinner size={26} /></div>;

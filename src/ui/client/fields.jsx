@@ -77,13 +77,105 @@ export function SchemaField({ f }) {
     case "greetings": return <Field label={f.label} hint={f.help}><GreetingsEditor path={f.path} value={val} /></Field>;
     case "channels": return <Field label={f.label} hint={f.help}><ChannelsEditor path={f.path} value={val} /></Field>;
     case "json": return <Field label={f.label} hint={f.help}><JsonField path={f.path} value={val} /></Field>;
+    case "llm": return <Field label={f.label} hint={f.help}><LlmEditor path={f.path} value={val} /></Field>;
     default: return <Field label={f.label} hint={f.help} required={f.required}><TextInput value={val == null ? "" : String(val)} onInput={set} /></Field>;
   }
 }
 
 // is this a scalar field (fits the two-column grid)?
 export function isScalar(f) {
-  return !["binds", "stringlist", "peoplemap", "greetings", "channels", "json"].includes(f.type) && !f.persona;
+  return !["binds", "stringlist", "peoplemap", "greetings", "channels", "json", "llm"].includes(f.type) && !f.persona;
+}
+
+// ---- LLM request headers / query / billing (Claude tab) ----
+// LLM_DEFAULTS mirrors src/ai/llm-defaults.js — keep in sync. x-claude-code-session-id
+// is added dynamically by the bot, so it's not shown or editable here.
+const LLM_DEFAULTS = {
+  headers: {
+    "anthropic-dangerous-direct-browser-access": "true",
+    "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,web-search-2025-03-05",
+    "x-app": "cli",
+    "user-agent": "claude-cli/2.1.159 (external, sdk-cli)",
+  },
+  query: { beta: "true" },
+  billingHeader: "cc_version=2.1.159.286; cc_entrypoint=sdk-cli; cch=e2159;",
+};
+const kvRows = (obj) => Object.entries(obj || {}).map(([k, v]) => ({ k, v: String(v) }));
+const rowsToObj = (rows) => { const o = {}; for (const r of rows) { const k = (r.k || "").trim(); if (k) o[k] = r.v; } return o; };
+
+// Module-level so it isn't remounted every render (which would drop input focus).
+function KvTable({ rows, upd, keyPlaceholder }) {
+  return (
+    <div class="rows">
+      {rows.map((r, i) => (
+        <div class="erow">
+          <TextInput class="grow" placeholder={keyPlaceholder} value={r.k} onInput={(val) => { const n = rows.map((x) => ({ ...x })); n[i].k = val; upd(n); }} />
+          <TextInput class="grow" placeholder="value" value={r.v} onInput={(val) => { const n = rows.map((x) => ({ ...x })); n[i].v = val; upd(n); }} />
+          <IconBtn name="trash" label="Remove" onClick={() => upd(rows.filter((_, j) => j !== i))} />
+        </div>
+      ))}
+      <div><Btn variant="ghost" size="sm" icon="plus" onClick={() => upd([...rows, { k: "", v: "" }])}>Add</Btn></div>
+    </div>
+  );
+}
+
+function LlmEditor({ path, value }) {
+  const v = value || {};
+  const seededH = (v.headers && Object.keys(v.headers).length) ? v.headers : LLM_DEFAULTS.headers;
+  const seededQ = (v.query && Object.keys(v.query).length) ? v.query : LLM_DEFAULTS.query;
+  const [headers, setHeaders] = useState(() => kvRows(seededH));
+  const [query, setQuery] = useState(() => kvRows(seededQ));
+  const [billing, setBilling] = useState(v.billingHeader || LLM_DEFAULTS.billingHeader);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+
+  function commit(h, q, b) { setPath(S.config.value, path, { headers: rowsToObj(h), query: rowsToObj(q), billingHeader: b }); markSettingsDirty(); }
+  const updH = (rows) => { setHeaders(rows); commit(rows, query, billing); };
+  const updQ = (rows) => { setQuery(rows); commit(headers, rows, billing); };
+  const updB = (b) => { setBilling(b); commit(headers, query, b); };
+
+  function restore() {
+    const h = kvRows(LLM_DEFAULTS.headers), q = kvRows(LLM_DEFAULTS.query);
+    setHeaders(h); setQuery(q); setBilling(LLM_DEFAULTS.billingHeader);
+    commit(h, q, LLM_DEFAULTS.billingHeader); toast("Restored default headers");
+  }
+  function copyAll() {
+    const text = headers.filter((r) => (r.k || "").trim()).map((r) => r.k + ": " + r.v).join("\n");
+    navigator.clipboard.writeText(text).then(() => toast("Copied headers")).catch(() => toast("Copy failed", "bad"));
+  }
+  function doImport() {
+    const rows = [];
+    for (const line of importText.split("\n")) {
+      const t = line.trim(); if (!t) continue;
+      const i = t.indexOf(":"); if (i < 1) continue;
+      rows.push({ k: t.slice(0, i).trim(), v: t.slice(i + 1).trim() });
+    }
+    if (!rows.length) { toast("No 'Key: Value' lines found", "bad"); return; }
+    setHeaders(rows); commit(rows, query, billing); setImportOpen(false); setImportText("");
+    toast("Imported " + rows.length + " headers");
+  }
+
+  return (
+    <div>
+      <div class="row" style="margin-bottom:8px">
+        <Btn variant="secondary" size="sm" onClick={copyAll}>Copy all</Btn>
+        <Btn variant="secondary" size="sm" onClick={() => setImportOpen((o) => !o)}>Import</Btn>
+        <Btn variant="ghost" size="sm" onClick={restore}>Restore defaults</Btn>
+      </div>
+      {importOpen && (
+        <div style="margin-bottom:10px">
+          <Textarea code value={importText} placeholder={"Paste headers, one per line:\nanthropic-beta: ...\nx-app: cli"} style="min-height:90px" onInput={setImportText} />
+          <div class="row" style="margin-top:6px"><Btn variant="primary" size="sm" onClick={doImport}>Replace headers with pasted list</Btn></div>
+        </div>
+      )}
+      <div class="group-head">Headers</div>
+      <KvTable rows={headers} upd={updH} keyPlaceholder="header name" />
+      <div class="group-head" style="margin-top:12px">Query params</div>
+      <KvTable rows={query} upd={updQ} keyPlaceholder="param name" />
+      <div class="group-head" style="margin-top:12px">Billing header (OAuth mode)</div>
+      <TextInput value={billing} onInput={updB} placeholder="cc_version=...; cc_entrypoint=sdk-cli; ..." />
+    </div>
+  );
 }
 
 // ---- string list ----

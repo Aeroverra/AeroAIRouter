@@ -56,6 +56,10 @@ const defaults = {
     models: { casual: "claude-opus-4-8", complex: "claude-opus-4-8" },
     maxTokens: 128000,
     maxHistoryPerChannel: 100,
+    // LLM request customization, structured as per-provider profiles (future
+    // multi-LLM). Empty objects => use the shipped defaults (see ai/llm-defaults.js).
+    provider: "anthropic",
+    providers: { anthropic: { headers: {}, query: {}, billingHeader: "" } },
   },
   persona: { emoji: "" },
   plugins: { enabled: [], disabled: [], uninstalled: [], config: {} },
@@ -155,6 +159,8 @@ const config = {
     models: merged.ai.models,
     maxTokens: merged.ai.maxTokens,
     maxHistoryPerChannel: merged.ai.maxHistoryPerChannel,
+    provider: merged.ai.provider,
+    providers: merged.ai.providers,
   },
 
   // misc secrets / feature config
