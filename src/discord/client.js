@@ -157,18 +157,30 @@ export function createDiscordClient() {
     ],
   });
 
+  const ACTIVITY_TYPES = { Playing: ActivityType.Playing, Streaming: ActivityType.Streaming, Listening: ActivityType.Listening, Watching: ActivityType.Watching };
+  function applyPresence() {
+    // config.discord.presence = { status, activityType, text, url }. Falls back to
+    // the legacy activity {text,url}. NB: bots can't set a true "Custom Status"
+    // (the emoji line) via the API, so the text is shown as an activity; Streaming
+    // only shows the live badge when a twitch/youtube url is set.
+    const p = config.discord.presence || {};
+    const legacy = config.discord.activity || {};
+    const text = (p.text != null && p.text !== "") ? p.text : (legacy.text || "");
+    const url = (p.url != null && p.url !== "") ? p.url : (legacy.url || "");
+    const status = ["online", "idle", "dnd", "invisible"].includes(p.status) ? p.status : "online";
+    const typeName = p.activityType || "Streaming";
+    const type = ACTIVITY_TYPES[typeName] != null ? ACTIVITY_TYPES[typeName] : ActivityType.Streaming;
+    const activity = { name: text || " ", type };
+    if (type === ActivityType.Streaming && url) activity.url = url;
+    try {
+      client.user.setPresence({ activities: text ? [activity] : [], status });
+      console.log("[discord] Presence: " + status + (text ? " / " + typeName + " " + text : ""));
+    } catch (e) { console.error("[discord] Failed to set presence:", e.message); }
+  }
+
   client.once("clientReady", () => {
     console.log("[discord] Logged in as " + client.user.tag);
-    client.user.setPresence({
-      activities: [
-        {
-          name: config.discord.activity.text,
-          type: ActivityType.Streaming,
-          url: config.discord.activity.url,
-        },
-      ],
-      status: "online",
-    });
+    applyPresence();
     setupPresenceWatcher(client);
     setupJoinWatcher(client);
   });
@@ -176,6 +188,9 @@ export function createDiscordClient() {
   client.on("messageCreate", (message) => {
     if (message.author.id === client.user.id) return;
     if (message.author.bot && !config.discord.people[message.author.id]) return;
+    // Ignore Discord SYSTEM messages (pins, joins, boosts, etc.) — they carry no
+    // real content and must never trigger a reply. Only Default (0) and Reply (19).
+    if (message.system || (message.type !== 0 && message.type !== 19)) return;
 
     if (message.channel.isThread && message.channel.isThread()) {
       var threadMap = getThreadToAgent();

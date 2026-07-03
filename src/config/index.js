@@ -48,6 +48,7 @@ const defaults = {
     guilds: {},
     people: {},
     activity: { text: "", url: "" },
+    presence: { status: "online", activityType: "Streaming", text: "", url: "" },
   },
   ai: {
     auth: { mode: "auto" }, // auto | apikey | oauth

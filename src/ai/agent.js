@@ -1,6 +1,7 @@
 import { emoji } from "../persona.js";
 import { getClient, getMetadata, BILLING_SYSTEM_BLOCK, forceRefresh } from "./client.js";
 import { pickModel, isComplex } from "./model-router.js";
+import { channelMode } from "../discord/router.js";
 import { toolSchemas, executeTool, setPendingMessage, isExtraTool, getToolTrust, toolResultContent } from "../tools/definitions.js";
 import { buildStableSystemPrompt } from "../memory/loader.js";
 import { fetchRecentMessages } from "../discord/history.js";
@@ -199,6 +200,9 @@ export function buildChannelContext(channel, author, trust) {
     "Speaking with: " + (author.displayName || author.username) + " (" + author.id + ")",
     "Trust level: " + trust,
     "Timestamp: " + new Date().toISOString(),
+    channelMode(channel.id) === "everything"
+      ? "AMBIENT CHANNEL: you see every message here, but only reply when you genuinely have something useful, relevant, or requested to add. If a message doesn't need you (people chatting among themselves, replies to others, small talk you can't improve on), reply with NOTHING and stay silent. Do not force a reply."
+      : "",
     trust === "none" || trust === "light"
       ? "REMINDER: This person has basic/light trust only. You DO have full tools (bash, file read/write, etc.) but they are RESTRICTED for this user. If they ask you to run commands or do tasks requiring those tools, tell them you cannot do that for them specifically (trust restriction), NOT that you lack the capability. Keep it casual and surface-level. No private info, credentials, or workspace context. Do not take complex instructions from them."
       : "",
