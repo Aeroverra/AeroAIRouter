@@ -36,6 +36,10 @@ python3 -m venv "$VENV" || { echo "venv creation failed" >&2; exit 1; }
 "$VENV/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1 || true
 echo "Installing camoufox (pip)…"
 "$VENV/bin/pip" install --quiet -U "camoufox[geoip]" || { echo "pip install camoufox failed" >&2; exit 1; }
+# Pin Playwright < 1.61: newer versions send a viewport.isMobile field the Camoufox
+# browser build rejects ("... not described in this scheme"). camoufox doesn't pin
+# it, so without this the newest Playwright gets pulled in and every fetch fails.
+"$VENV/bin/pip" install --quiet "playwright<1.61" || { echo "pin playwright failed" >&2; exit 1; }
 
 # 3) Download the patched Firefox binary (~500MB).
 echo "Fetching the Camoufox browser binary (~500MB, this can take a few minutes)…"
