@@ -143,6 +143,7 @@ const config = {
     guilds: merged.discord.guilds,
     people: merged.discord.people,
     activity: merged.discord.activity,
+    presence: merged.discord.presence,
   },
 
   // ai
