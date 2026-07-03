@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Skills + Memories
+- **Skills** — reusable, on-demand instruction packs. A skill is a folder
+  `AIROUTER_HOME/skills/<slug>/SKILL.md` with `name:`/`description:` frontmatter.
+  Only each enabled skill's name + one-line description goes into the system
+  prompt (cheap, cache-friendly); the bot loads the full body on demand via the
+  new **`use_skill`** tool (progressive disclosure). New **Skills** tab: list,
+  enable/disable, create/edit, and **import** from pasted markdown or a raw
+  `https` URL (e.g. a SKILL.md on GitHub). Enabled state lives in
+  `config.skills.disabled`.
+- **Memories** — the bot's self-written notes (`AIROUTER_HOME/data/memory/*.md`)
+  now have a dedicated **`manage_memory`** tool (save / append / list / read /
+  delete, owner-only) and a **Memories** tab to view, edit, add, and prune them —
+  with an accurate **loaded / skipped** indicator (the 15-file / 50KB prompt
+  budget is computed in one shared module so the UI matches what the bot injects).
+- Both apply **live** — the bot watches `data/`, `persona/`, and `skills/`, so
+  memory and skill-body edits made in the panel take effect with no restart
+  (enabling/disabling a skill still needs a bot restart, like plugins).
+
 ### Control panel rewrite
 - The config UI was **rebuilt** on Preact + signals with a real design-token
   system and a component library (esbuild bundles `src/ui/client/` → committed

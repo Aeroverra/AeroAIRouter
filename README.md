@@ -109,6 +109,7 @@ Set the mode in `config.json` under `ai.auth.mode`:
 | `plugins.enabled` | Plugin names to force on (on top of those enabled by default). |
 | `plugins.disabled` | Plugin names to force off (overrides defaults). |
 | `plugins.config` | Per-plugin config, keyed by plugin name. |
+| `skills.disabled` | Skill slugs to turn off (skills are on by default). |
 | `mcp.servers` | Your own MCP servers: `[{ name, command, args, env, enabled, trust }]` (stdio). |
 | `review.policy` | `allow` / `deny` — default verdict for non-dangerous commands when no reviewer opines. |
 | `review.dangerPatterns` | Regex strings forming the safety floor (denied by default). |
@@ -180,6 +181,47 @@ The bot is an MCP **client**. Tools come from two places, both shown under the
   you don't have to store tokens in `config.json`.
 
 Changes to MCP/plugin wiring apply on the next bot restart.
+
+## Skills
+
+Skills are reusable, on-demand instruction packs. A skill is a folder
+`AIROUTER_HOME/skills/<slug>/SKILL.md` with YAML frontmatter:
+
+```markdown
+---
+name: PDF report builder
+description: Turn a dataset into a polished multi-page PDF report.
+---
+
+## When to use
+...
+## Steps
+1. ...
+```
+
+Only each **enabled** skill's `name` + `description` is injected into the system
+prompt (cheap and cache-friendly). The bot loads a skill's full body **on demand**
+with its `use_skill` tool when a task matches the description — progressive
+disclosure that keeps many skills affordable. Extra reference files can sit beside
+`SKILL.md` and be read with `read_file` once the skill is loaded.
+
+Manage skills from the **Skills** tab: enable/disable, create/edit, or **import**
+from pasted markdown or a raw `https` URL (e.g. a `SKILL.md` on GitHub). Skills are
+enabled unless listed in `config.skills.disabled`. See
+`examples/skills/example-skill/` for the format. Editing a skill's body/description
+applies live; enabling/disabling one needs a bot restart.
+
+## Memories
+
+The bot keeps rolling notes as markdown files in `AIROUTER_HOME/data/memory/*.md`.
+It writes them itself with its owner-only `manage_memory` tool (save / append /
+list / read / delete) as it learns durable facts, and injects the most recent ones
+into its system prompt (the 15 newest files, up to a ~50KB budget). Your
+hand-written `persona/memory.md` is always loaded in full as core long-term memory.
+
+The **Memories** tab lists every note with an accurate **loaded / skipped**
+indicator (matching the exact selection the bot applies), and lets you view, edit,
+add, or prune them. Edits apply live — the bot re-reads on change, no restart.
 
 ## Auto-update
 

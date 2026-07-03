@@ -217,7 +217,9 @@ export function filterToolsForTrust(trust) {
     // are owner-only (they could read secrets or run arbitrary commands).
     // Plugin/MCP tools default to owner-only (they hit external services with the
     // operator's credentials) unless the plugin/server marks them elevated/light.
-    const denied = ["bash", "read_file", "list_files", "write_file", "get_credentials", "spawn_agent", "voice_control", "trust_manage", "cron", "discord_send"];
+    // manage_memory is owner-only: memories are injected into the system prompt,
+    // so writing one can effectively steer the bot.
+    const denied = ["bash", "read_file", "list_files", "write_file", "get_credentials", "spawn_agent", "voice_control", "trust_manage", "cron", "discord_send", "manage_memory"];
     return toolSchemas.filter((t) => {
       if (isExtraTool(t.name)) return getToolTrust(t.name) === "elevated" || getToolTrust(t.name) === "light";
       return !denied.includes(t.name);

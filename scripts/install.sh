@@ -15,7 +15,7 @@ node -e 'process.exit(parseInt(process.versions.node,10) >= 20 ? 0 : 1)' \
 echo "Installing dependencies..."
 ( cd "$INSTALL_DIR" && { npm ci --omit=dev --no-audit --no-fund 2>/dev/null || npm install --omit=dev; } )
 
-mkdir -p "$AIROUTER_HOME"/data "$AIROUTER_HOME"/persona "$AIROUTER_HOME"/credentials "$AIROUTER_HOME"/plugins
+mkdir -p "$AIROUTER_HOME"/data/memory "$AIROUTER_HOME"/persona "$AIROUTER_HOME"/credentials "$AIROUTER_HOME"/plugins "$AIROUTER_HOME"/skills
 [ -f "$AIROUTER_HOME/config.json" ] || cp "$INSTALL_DIR/examples/config.example.json" "$AIROUTER_HOME/config.json"
 if [ ! -f "$AIROUTER_HOME/secrets.env" ]; then
   cp "$INSTALL_DIR/examples/secrets.example.env" "$AIROUTER_HOME/secrets.env"

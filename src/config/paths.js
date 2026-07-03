@@ -18,6 +18,7 @@ export const DATA_DIR = join(AIROUTER_HOME, "data");
 export const PERSONA_DIR = join(AIROUTER_HOME, "persona");
 export const CREDENTIALS_DIR = join(AIROUTER_HOME, "credentials");
 export const PLUGINS_DIR = join(AIROUTER_HOME, "plugins");
+export const SKILLS_DIR = join(AIROUTER_HOME, "skills");
 
 // Example/template assets shipped inside the repo (used by install + first-run).
 export const EXAMPLES_DIR = join(INSTALL_DIR, "examples");

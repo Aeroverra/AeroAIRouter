@@ -33,6 +33,7 @@
       "voice": { "channelId": "", "whisperPath": "", "edgeTtsPath": "", "ttsCacheDir": "/tmp/aeroairouter-tts" }
     }
   },
+  "skills": { "disabled": [] },
   "mcp": {
     "servers": []
   },

@@ -58,6 +58,7 @@ const defaults = {
   },
   persona: { emoji: "" },
   plugins: { enabled: [], disabled: [], uninstalled: [], config: {} },
+  skills: { disabled: [] }, // on-demand instruction packs in AIROUTER_HOME/skills; enabled unless listed
   mcp: { servers: [] }, // direct MCP servers: [{ name, transport, command, args, env, enabled, trust }]
   review: { policy: "allow", dangerPatterns: [], allowReviewerOverride: false },
   features: { voice: false },
@@ -158,6 +159,7 @@ const config = {
   braveApiKey: secrets.braveApiKey,
   persona: merged.persona,
   plugins: merged.plugins,
+  skills: merged.skills,
   mcp: merged.mcp,
   review: merged.review,
   features: merged.features,

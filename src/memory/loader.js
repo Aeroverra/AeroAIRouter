@@ -1,9 +1,10 @@
-import { readFileSync, readdirSync, watch, existsSync } from "fs";
+import { readFileSync, watch, existsSync } from "fs";
 import { join } from "path";
 import config from "../config/index.js";
-import { PERSONA_DIR } from "../config/paths.js";
+import { PERSONA_DIR, DATA_DIR, SKILLS_DIR } from "../config/paths.js";
+import { selectMemories, buildMemoryText } from "./store.js";
+import { buildSkillsPromptSection } from "../skills/loader.js";
 
-const DATA_DIR = config.dataDir;
 let cachedStablePrompt = null;
 let watchers = [];
 
@@ -15,30 +16,14 @@ function loadPersona(filename) {
   return readFileSync(path, "utf8");
 }
 
-const MAX_MEMORY_BYTES = 50000;
-
+// Recent session notes (AIROUTER_HOME/data/memory/*.md). Selection + byte budget
+// live in ./store.js so the config UI's "loaded/skipped" view stays in sync.
 function loadMemoryFiles() {
-  const memDir = join(DATA_DIR, "memory");
-  if (!existsSync(memDir)) return "";
-  const files = readdirSync(memDir)
-    .filter((f) => f.endsWith(".md"))
-    .sort()
-    .slice(-15);
-
-  const parts = [];
-  let totalBytes = 0;
-  for (const f of files) {
-    const content = readFileSync(join(memDir, f), "utf8");
-    const entry = "--- " + f + " ---\n" + content;
-    if (totalBytes + entry.length > MAX_MEMORY_BYTES) {
-      console.log("[memory] Hit 50KB memory cap at " + parts.length + " files, skipping " + f + " (" + Math.round(entry.length / 1024) + "KB)");
-      continue;
-    }
-    parts.push(entry);
-    totalBytes += entry.length;
-  }
-  console.log("[memory] Loaded " + parts.length + " memory files (" + Math.round(totalBytes / 1024) + "KB)");
-  return parts.join("\n\n");
+  const { files, usedBytes } = selectMemories();
+  const loaded = files.filter((f) => f.loaded).length;
+  const skipped = files.length - loaded;
+  console.log("[memory] Loaded " + loaded + " memory files (" + Math.round(usedBytes / 1024) + "KB)" + (skipped ? ", skipped " + skipped : ""));
+  return buildMemoryText();
 }
 
 export function buildStableSystemPrompt() {
@@ -58,6 +43,11 @@ export function buildStableSystemPrompt() {
   if (recentMemories) {
     parts.push("\n\n# RECENT SESSION NOTES\n\n" + recentMemories);
   }
+
+  // Enabled skills: only name + description here (loaded in full on demand via
+  // the use_skill tool). Keeps the prompt small and cache-friendly.
+  const skillsSection = buildSkillsPromptSection(config);
+  if (skillsSection) parts.push(skillsSection);
 
   let responseFormat =
     "\n\n# TOOLS AVAILABLE\n\nYou have access to tools for executing bash commands, reading files, writing files, and listing directories.\nUse these when asked to do tasks that require system access. Be careful with destructive operations.\n\n# RESPONSE FORMAT\n\nYou are responding in Discord. Keep messages under 2000 characters. Use Discord markdown.";
@@ -89,7 +79,11 @@ export function invalidateCache() {
 }
 
 export function startWatching() {
-  for (const dir of [DATA_DIR, PERSONA_DIR]) {
+  // data/ + persona/ + skills/ — any .md change rebuilds the stable prompt, so
+  // edits made in the config UI (memories, persona, skill bodies) apply live
+  // without a bot restart. (Enabling/disabling a skill lives in config.json and
+  // still needs a restart, like plugins.)
+  for (const dir of [DATA_DIR, PERSONA_DIR, SKILLS_DIR]) {
     if (!existsSync(dir)) continue;
     const watcher = watch(dir, { recursive: true }, (event, filename) => {
       if (filename && filename.endsWith(".md")) {

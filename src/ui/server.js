@@ -14,6 +14,8 @@ import * as auth from "./auth.js";
 import { accessUrls, advertiseMdns, bindSuggestions } from "./netinfo.js";
 import { SECTIONS } from "./schema.js";
 import { discoverPlugins, isPluginEnabled, isPluginUninstalled } from "../plugins/registry.js";
+import * as memstore from "../memory/store.js";
+import * as skills from "../skills/loader.js";
 
 // Live MCP status written by the bot process at startup (DATA_DIR/mcp-status.json).
 function readMcpStatus() {
@@ -559,6 +561,98 @@ export function createApp() {
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
+  });
+
+  // ---- memories (the bot's self-written notes; AIROUTER_HOME/data/memory/*.md) ----
+  app.get("/api/memories", requireAuth, (req, res) => {
+    try {
+      const { files, usedBytes } = memstore.selectMemories();
+      res.json({ files, budget: { usedBytes, maxBytes: memstore.MAX_MEMORY_BYTES, maxFiles: memstore.MAX_MEMORY_FILES } });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.get("/api/memories/:name", requireAuth, (req, res) => {
+    try { res.json({ content: memstore.readMemory(req.params.name) }); }
+    catch (err) { res.status(404).json({ error: err.message }); }
+  });
+  app.post("/api/memories", requireAuth, requireCsrf, (req, res) => {
+    try { const name = memstore.writeMemory((req.body && req.body.name) || "", (req.body && req.body.content) || ""); res.json({ ok: true, name }); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+  app.put("/api/memories/:name", requireAuth, requireCsrf, (req, res) => {
+    try { const name = memstore.writeMemory(req.params.name, (req.body && req.body.content) || ""); res.json({ ok: true, name }); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+  app.delete("/api/memories/:name", requireAuth, requireCsrf, (req, res) => {
+    try { memstore.deleteMemory(req.params.name); res.json({ ok: true }); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  // ---- skills (on-demand instruction packs; AIROUTER_HOME/skills/<slug>/SKILL.md) ----
+  app.get("/api/skills", requireAuth, (req, res) => {
+    try {
+      const cfg = io.readConfig();
+      res.json({ skills: skills.discoverSkills().map((s) => ({ ...s, enabled: skills.isSkillEnabled(s.slug, cfg) })) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.get("/api/skills/:slug", requireAuth, (req, res) => {
+    try {
+      const cfg = io.readConfig();
+      const s = skills.readSkill(req.params.slug);
+      res.json({ slug: req.params.slug, name: s.name, description: s.description, body: s.body, enabled: skills.isSkillEnabled(req.params.slug, cfg) });
+    } catch (err) { res.status(404).json({ error: err.message }); }
+  });
+  app.put("/api/skills/:slug", requireAuth, requireCsrf, (req, res) => {
+    const slug = req.params.slug;
+    if (!skills.isValidSlug(slug)) return res.status(400).json({ error: "invalid skill name (use lowercase letters, digits, - and _)" });
+    const b = req.body || {};
+    try { skills.writeSkill(slug, { name: b.name, description: b.description, body: b.body }); res.json({ ok: true, slug }); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+  app.delete("/api/skills/:slug", requireAuth, requireCsrf, (req, res) => {
+    const slug = req.params.slug;
+    try {
+      skills.deleteSkill(slug);
+      const cfg = io.readConfig();
+      if (cfg.skills && Array.isArray(cfg.skills.disabled) && cfg.skills.disabled.includes(slug)) {
+        cfg.skills.disabled = cfg.skills.disabled.filter((x) => x !== slug);
+        io.writeConfig(cfg);
+      }
+      res.json({ ok: true });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+  app.put("/api/skills/:slug/enabled", requireAuth, requireCsrf, (req, res) => {
+    const slug = req.params.slug;
+    if (!skills.isValidSlug(slug)) return res.status(400).json({ error: "invalid skill name" });
+    try {
+      const cfg = io.readConfig();
+      cfg.skills = cfg.skills || {};
+      const dis = new Set(Array.isArray(cfg.skills.disabled) ? cfg.skills.disabled : []);
+      if (req.body && req.body.enabled) dis.delete(slug); else dis.add(slug);
+      cfg.skills.disabled = [...dis];
+      io.writeConfig(cfg);
+      res.json({ ok: true });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+  // Import a skill from pasted markdown or a raw https URL (e.g. raw.githubusercontent.com).
+  app.post("/api/skills/import", requireAuth, requireCsrf, async (req, res) => {
+    const b = req.body || {};
+    try {
+      let md = typeof b.markdown === "string" ? b.markdown : "";
+      if (!md && b.url) {
+        if (!/^https:\/\//i.test(String(b.url))) return res.status(400).json({ error: "url must be https" });
+        const r = await fetch(String(b.url), { signal: AbortSignal.timeout(12000), redirect: "follow" });
+        if (!r.ok) return res.status(502).json({ error: "fetch failed (HTTP " + r.status + ")" });
+        md = await r.text();
+      }
+      if (!md || !md.trim()) return res.status(400).json({ error: "provide markdown or a url" });
+      if (md.length > 200000) return res.status(400).json({ error: "skill too large (>200KB)" });
+      const parsed = skills.parseSkill(md);
+      const name = parsed.name || b.name || "";
+      const slug = skills.slugify(b.slug || name);
+      if (!skills.isValidSlug(slug)) return res.status(400).json({ error: "could not derive a valid name — add a `name:` frontmatter line or pass a slug" });
+      skills.writeSkill(slug, { name: name || slug, description: parsed.description, body: parsed.body });
+      res.json({ ok: true, slug, name: name || slug });
+    } catch (err) { res.status(400).json({ error: err.message }); }
   });
 
   // ---- change admin password ----

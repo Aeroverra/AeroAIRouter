@@ -12,6 +12,8 @@ import { speak, joinVoice, leaveVoice, isInVoice } from "../discord/voice.js";
 import { setTrustOverride, clearTrustOverride, getOverrides } from "../discord/trust.js";
 import { webSearch, webFetch } from "./web.js";
 import { createJob, listJobs, deleteJob, toggleJob } from "./scheduler.js";
+import { selectMemories, readMemory, writeMemory, appendMemory, deleteMemory, safeMemoryName } from "../memory/store.js";
+import { discoverSkills, readSkill, isSkillEnabled } from "../skills/loader.js";
 import config from "../config/index.js";
 
 let pendingSubagentMessage = null;
@@ -299,6 +301,30 @@ export const toolSchemas = [
       required: ["action"],
     },
   },
+  {
+    name: "manage_memory",
+    description: "Your long-term memory: markdown notes that are injected into your system prompt on every future run. SAVE something whenever you learn a durable fact worth remembering (a preference, a decision, how something works, a person). Use one file per topic; name it clearly and date-prefixed (e.g. 2026-07-03-user-prefers-X.md) so recent notes stay in the loaded window. Actions: save (create/overwrite), append (add to an existing note), list (see all + which are currently loaded), read, delete.",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["save", "append", "list", "read", "delete"], description: "What to do" },
+        name: { type: "string", description: "Memory file name, e.g. 2026-07-03-topic.md (for save/append/read/delete)" },
+        content: { type: "string", description: "Markdown content (for save/append)" },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "use_skill",
+    description: "Load the full instructions for one of your available SKILLS (listed with slugs in your system prompt). Call this when a task matches a skill's description, then follow the loaded instructions. Only load a skill when it is relevant.",
+    input_schema: {
+      type: "object",
+      properties: {
+        slug: { type: "string", description: "The skill slug shown in the SKILLS section, e.g. \"pdf-report\"" },
+      },
+      required: ["slug"],
+    },
+  },
 ];
 
 // Voice tools are only offered when the voice feature is enabled.
@@ -559,6 +585,55 @@ export function executeTool(name, input, discordClient, callerAgent) {
         }
         default:
           return { error: "Unknown action. Use create, list, delete, enable, or disable." };
+      }
+    }
+    case "manage_memory": {
+      try {
+        switch (input.action) {
+          case "list": {
+            const { files, usedBytes } = selectMemories();
+            return {
+              success: true,
+              loaded: files.filter((f) => f.loaded).map((f) => f.name),
+              skipped: files.filter((f) => !f.loaded).map((f) => ({ name: f.name, reason: f.reason })),
+              usedKB: Math.round(usedBytes / 1024),
+            };
+          }
+          case "read":
+            if (!input.name) return { success: false, error: "name required" };
+            return { success: true, name: safeMemoryName(input.name), content: readMemory(input.name) };
+          case "save": {
+            if (!input.name) return { success: false, error: "name required" };
+            const saved = writeMemory(input.name, input.content || "");
+            return { success: true, saved, message: "Saved memory " + saved };
+          }
+          case "append": {
+            if (!input.name) return { success: false, error: "name required" };
+            const appended = appendMemory(input.name, input.content || "");
+            return { success: true, saved: appended, message: "Appended to " + appended };
+          }
+          case "delete":
+            if (!input.name) return { success: false, error: "name required" };
+            deleteMemory(input.name);
+            return { success: true, message: "Deleted " + safeMemoryName(input.name) };
+          default:
+            return { success: false, error: "Unknown action. Use save, append, list, read, or delete." };
+        }
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+    case "use_skill": {
+      try {
+        if (!input.slug) return { success: false, error: "slug required" };
+        const all = discoverSkills();
+        const meta = all.find((s) => s.slug === input.slug);
+        if (!meta) return { success: false, error: "No skill named '" + input.slug + "'. Available: " + all.map((s) => s.slug).join(", ") };
+        if (!isSkillEnabled(input.slug, config)) return { success: false, error: "Skill '" + input.slug + "' is disabled." };
+        const skill = readSkill(input.slug);
+        return { success: true, name: skill.name || input.slug, instructions: skill.body };
+      } catch (err) {
+        return { success: false, error: err.message };
       }
     }
     default: {
