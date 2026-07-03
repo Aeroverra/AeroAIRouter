@@ -235,7 +235,7 @@ export const toolSchemas = [
   },
   {
     name: "web_fetch",
-    description: "Fetch a web page or API endpoint and return its content. HTML is stripped to text.",
+    description: "Fetch a web page or API endpoint and return its content. HTML is stripped to text. If the site is anti-bot protected (Cloudflare / JS challenge / 403), this returns blocked:true — then retry the same url with the camoufox__fetch_url tool (a stealth browser) if it's available.",
     input_schema: {
       type: "object",
       properties: {

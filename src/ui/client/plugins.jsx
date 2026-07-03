@@ -73,6 +73,7 @@ export function PluginConfig({ name, navigate }) {
   const p = S.plugins.value.find((x) => x.name === name);
   if (!p) return <div><Btn variant="ghost" onClick={() => navigate("__plugins")}>← All plugins</Btn><p class="field-err">Plugin not found.</p></div>;
   if (p.ui === "gogcli-setup") return <GogSetup p={p} navigate={navigate} />;
+  if (p.ui === "camoufox-setup") return <CamoufoxSetup p={p} navigate={navigate} />;
 
   const ref = useRef(null);
   if (!ref.current || ref.current.name !== name) ref.current = { name, conf: Object.assign({}, p.defaults || {}, p.config || {}), secretEdits: {}, enabled: !!p.enabled };
@@ -267,6 +268,53 @@ function GogEnable({ p, stt }) {
     </div>
     {!ready && <p class="hint" style="margin-top:8px">Finish steps 1–3, then enable and restart the bot.</p>}
   </>;
+}
+
+// ============================================================ CAMOUFOX ======
+function CamoufoxSetup({ p, navigate }) {
+  const [stt, setStt] = useState(null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState("");
+  const [enabled, setEnabled] = useState(!!p.enabled);
+  const act = (a, b) => api("POST", "/api/plugins/" + p.name + "/action/" + a, b || {});
+  async function refresh() { try { setStt(await act("status")); setErr(null); } catch (ex) { setErr(ex.message); } }
+  useEffect(() => { refresh(); }, []);
+  async function install() {
+    setBusy(true); setOut("Installing Camoufox — downloading a ~500MB browser, this can take a few minutes…");
+    try { const r = await act("install"); setOut("✓ installed " + (r.version || "") + (r.sysdeps && r.sysdeps.indexOf("missing") === 0 ? " — ⚠ " + r.sysdeps : "")); await refresh(); }
+    catch (ex) { setOut("✗ " + ex.message); }
+    setBusy(false);
+  }
+  async function saveEnabled(v) {
+    setEnabled(v);
+    try { await api("PUT", "/api/plugins/" + p.name, { enabled: v }); p.enabled = v; toast((v ? "Enabled" : "Disabled") + ". Restart the bot to apply."); }
+    catch (ex) { setEnabled(!v); toast(ex.message, "bad"); }
+  }
+  return (
+    <div>
+      <Btn variant="ghost" onClick={() => navigate("__plugins")}>← All plugins</Btn>
+      <div class="page-head" style="margin-top:8px"><h1>{p.label || "Camoufox"}</h1><p class="sub">A stealth-browser fallback. When web_fetch is blocked by anti-bot protection (Cloudflare / JS challenge), Azula retries the page through Camoufox. Install it here, then restart the bot.</p></div>
+      {err && <p class="field-err">{err}</p>}
+      <div class="rows">
+        <Card class="card-pad">
+          <h3 style="margin-bottom:8px">1. Install Camoufox</h3>
+          {!stt ? <p class="hint"><Spinner size={13} /> Loading…</p> :
+            stt.installed ? <p class="status ok"><span class="dot" />Installed {stt.version || ""}</p> : <>
+              <p class="hint" style="margin-bottom:8px">Downloads an anti-detect Firefox (~500MB) into a private venv on this server. It also needs system libs (libgtk-3-0, libx11-xcb1, libasound2, xvfb) — installed automatically if this server has passwordless sudo, otherwise run them yourself.</p>
+              <div class="row"><Btn variant="primary" loading={busy} onClick={install}>Install Camoufox</Btn></div>
+            </>}
+          {out && <p class="hint" style="margin-top:8px">{out}</p>}
+        </Card>
+        <Card class="card-pad" dim={!(stt && stt.installed)}>
+          <h3 style="margin-bottom:8px">2. Enable</h3>
+          <Field><Switch checked={enabled} onChange={saveEnabled} label="plugin enabled" /></Field>
+          <div class="row" style="margin-top:4px"><Btn variant="secondary" icon="restart" onClick={restartBot}>Restart bot</Btn></div>
+          <p class="hint" style="margin-top:8px">After installing, enable and restart the bot. The <code>camoufox__fetch_url</code> tool then appears under MCP Servers, and web_fetch auto-suggests it on blocked pages.</p>
+        </Card>
+      </div>
+    </div>
+  );
 }
 
 // ============================================================ MCP =============
