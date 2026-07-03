@@ -70,7 +70,13 @@ export function SchemaField({ f }) {
   switch (f.type) {
     case "boolean": return <Field label={f.label} hint={f.help}><Switch checked={!!val} onChange={set} label={val ? "on" : "off"} /></Field>;
     case "number": return <Field label={f.label} hint={f.help}><NumberInput value={val} onInput={set} /></Field>;
-    case "select": return <Field label={f.label} hint={f.help}><Select value={val == null ? f.options[0] : val} options={f.options} onInput={set} /></Field>;
+    case "select": {
+      // options may be plain strings or [value, label] pairs; the effective value is the
+      // first element of a pair. Normalize the null-default so pair options don't fall back
+      // to the whole [value,label] array.
+      const firstVal = Array.isArray(f.options[0]) ? f.options[0][0] : f.options[0];
+      return <Field label={f.label} hint={f.help}><Select value={val == null ? firstVal : String(val)} options={f.options} onInput={set} /></Field>;
+    }
     case "binds": return <Field label={f.label} hint={f.help}><BindsEditor path={f.path} value={val} /></Field>;
     case "stringlist": return <Field label={f.label} hint={f.help}><StringListEditor path={f.path} value={val} /></Field>;
     case "peoplemap": return <Field label={f.label} hint={f.help}><PeopleEditor path={f.path} value={val} /></Field>;

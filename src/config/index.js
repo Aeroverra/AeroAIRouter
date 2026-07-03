@@ -68,7 +68,7 @@ const defaults = {
   review: { policy: "allow", dangerPatterns: [], allowReviewerOverride: false },
   features: { voice: false },
   voice: { channelId: "", whisperPath: "", edgeTtsPath: "", ttsCacheDir: "/tmp/aeroairouter-tts" },
-  update: { enabled: false, branch: "main", intervalHours: 24, channelId: "" },
+  update: { enabled: false, branch: "main", intervalMinutes: 60, intervalHours: 24, channelId: "" },
   integrations: {
     github: { defaultVisibility: "private" },
     cloudflare: { enabled: false, accountId: "" },

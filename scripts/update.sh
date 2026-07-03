@@ -21,7 +21,15 @@ npm ci --omit=dev --no-audit --no-fund 2>/dev/null || npm install --omit=dev
 echo "UPDATED ${OLD:0:8}..${NEW:0:8}"
 
 SERVICE="${SERVICE_NAME:-aeroairouter.service}"
+UI_SERVICE="${UI_SERVICE_NAME:-aeroairouter-ui.service}"
 if command -v systemctl >/dev/null 2>&1; then
+  # Restart the config-UI unit FIRST, then the bot. The bot restart tears down this
+  # script's own cgroup (the script is a child of the bot process), so anything after
+  # it may not run — the bot must go last. Only touch the UI unit if it actually exists
+  # (single-process deployments won't have a separate UI service).
+  if [ -n "$UI_SERVICE" ] && systemctl --user cat "$UI_SERVICE" >/dev/null 2>&1; then
+    systemctl --user restart "$UI_SERVICE" 2>/dev/null || true
+  fi
   systemctl --user restart "$SERVICE" 2>/dev/null \
     || systemctl --user restart azula-bot.service 2>/dev/null \
     || true

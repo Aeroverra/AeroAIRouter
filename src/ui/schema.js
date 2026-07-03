@@ -88,8 +88,10 @@ export const SECTIONS = [
     help: "Self-update from git.",
     fields: [
       { path: "update.enabled", label: "Enable auto-update", type: "boolean" },
+      { path: "update.intervalMinutes", label: "Check interval", type: "select",
+        options: [["15", "Every 15 minutes"], ["30", "Every 30 minutes"], ["60", "Every hour"], ["360", "Every 6 hours"], ["720", "Every 12 hours"], ["1440", "Once a day"]],
+        help: "How often to check git for a new version. Restarts the bot and the config UI when an update is applied." },
       { path: "update.branch", label: "Branch", type: "string", advanced: true },
-      { path: "update.intervalHours", label: "Check interval (hours)", type: "number", advanced: true },
       { path: "update.channelId", label: "Report to channel ID", type: "string", advanced: true },
     ],
   },
