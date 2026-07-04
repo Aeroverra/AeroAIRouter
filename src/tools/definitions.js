@@ -14,7 +14,7 @@ import { webSearch, webFetch } from "./web.js";
 // aliased to avoid clashing with task-queue.js's addTask/listTasks/updateTask/deleteTask (a separate TODO list)
 import { createTask as createXTask, updateTask as updateXTask, deleteTask as deleteXTask, listTasks as listXTasks, createSchedule, deleteSchedule, listSchedules } from "./task-store.js";
 import { runTask } from "./tasks.js";
-import { selectMemories, readMemory, writeMemory, appendMemory, deleteMemory, safeMemoryName } from "../memory/store.js";
+import { selectMemories, readMemory, writeMemory, appendMemory, deleteMemory, safeMemoryName, memorySummary } from "../memory/store.js";
 import { discoverSkills, readSkill, isSkillEnabled } from "../skills/loader.js";
 import config from "../config/index.js";
 
@@ -350,7 +350,7 @@ export const toolSchemas = [
   },
   {
     name: "manage_memory",
-    description: "Your long-term memory: markdown notes that are injected into your system prompt on every future run. SAVE something whenever you learn a durable fact worth remembering (a preference, a decision, how something works, a person). Use one file per topic; name it clearly and date-prefixed (e.g. 2026-07-03-user-prefers-X.md) so recent notes stay in the loaded window. Actions: save (create/overwrite), append (add to an existing note), list (see all + which are currently loaded), read, delete.",
+    description: "Your long-term memory: markdown notes. A MEMORY INDEX of ALL of them (name + one-line summary) is always in your prompt, and the most recent are loaded in full — read any other on demand with action \"read\". SAVE a durable fact worth remembering (a preference, a decision, how something works, a person). Use one file PER TOPIC and name it by the topic so you (and the index) can find it later — e.g. user-prefers-X.md, proxmox-setup.md — NOT a bare date. Start each note with a one-line summary/title so the index is meaningful. Actions: save (create/overwrite), append, list (all + summaries + which are loaded), read, delete.",
     input_schema: {
       type: "object",
       properties: {
@@ -681,8 +681,7 @@ export function executeTool(name, input, discordClient, callerAgent) {
             const { files, usedBytes } = selectMemories();
             return {
               success: true,
-              loaded: files.filter((f) => f.loaded).map((f) => f.name),
-              skipped: files.filter((f) => !f.loaded).map((f) => ({ name: f.name, reason: f.reason })),
+              memories: files.map((f) => ({ name: f.name, loaded: f.loaded, summary: memorySummary(f.name) })),
               usedKB: Math.round(usedBytes / 1024),
             };
           }

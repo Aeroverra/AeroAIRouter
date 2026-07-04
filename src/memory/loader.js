@@ -2,7 +2,7 @@ import { readFileSync, watch, existsSync } from "fs";
 import { join } from "path";
 import config from "../config/index.js";
 import { PERSONA_DIR, DATA_DIR, SKILLS_DIR } from "../config/paths.js";
-import { selectMemories, buildMemoryText } from "./store.js";
+import { selectMemories, buildMemoryText, buildMemoryIndex } from "./store.js";
 import { buildSkillsPromptSection } from "../skills/loader.js";
 
 let cachedStablePrompt = null;
@@ -33,6 +33,7 @@ export function buildStableSystemPrompt() {
   const memory = loadPersona("memory.md");
   const heartbeat = loadPersona("heartbeat.md");
   const recentMemories = loadMemoryFiles();
+  const memoryIndex = buildMemoryIndex();
 
   const parts = [
     soul,
@@ -40,6 +41,9 @@ export function buildStableSystemPrompt() {
     "\n\n# DISCORD ROUTING RULES\n\n" + heartbeat,
   ];
 
+  if (memoryIndex) {
+    parts.push("\n\n# MEMORY INDEX\n\nEvery memory you have, newest first — the name plus what each holds. The most recent are included in full under RECENT SESSION NOTES below; for ANYTHING else (older facts, past decisions, how something works), read it on demand with the manage_memory tool (action \"read\", exact name). Check this index before saying you don't remember something.\n\n" + memoryIndex);
+  }
   if (recentMemories) {
     parts.push("\n\n# RECENT SESSION NOTES\n\n" + recentMemories);
   }

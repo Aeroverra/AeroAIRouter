@@ -62,6 +62,45 @@ export function selectMemories() {
   return { files: out, usedBytes };
 }
 
+// A one-line summary of a memory, for the always-loaded index: its frontmatter
+// `description:` if present, else its first markdown heading, else its first
+// meaningful line. Lets the model tell what a memory holds without reading it.
+export function memorySummary(name) {
+  let content;
+  try { content = readMemory(name); } catch { return ""; }
+  if (!content) return "";
+  const fm = /description:\s*["']?(.+?)["']?\s*$/m.exec(content.split(/\n---/)[0] || "");
+  if (fm && fm[1].trim()) return fm[1].trim().slice(0, 160);
+  for (const raw of content.split("\n")) {
+    const line = raw.replace(/^#+\s*/, "").replace(/^\s*[-*]\s*/, "").trim();
+    if (!line) continue;
+    if (/^---/.test(line)) continue;
+    if (/^(name|description|metadata|node_type|type|originSessionId):/i.test(line)) continue;
+    if (/^\d{4}-\d{2}-\d{2}([ T-].*)?$/.test(line) && line.length < 40) continue; // skip bare date/time headings
+    return line.slice(0, 160);
+  }
+  return "";
+}
+
+// Compact index of EVERY memory (name + summary), newest first, so the model always
+// knows what exists — including memories too old to be loaded in full — and can pull
+// the relevant one on demand with manage_memory read. Cheap + stable (cached).
+export function buildMemoryIndex(limit = 100) {
+  ensureDir();
+  let names;
+  try { names = readdirSync(MEMORY_DIR).filter((f) => f.toLowerCase().endsWith(".md")).sort().reverse(); }
+  catch { return ""; }
+  if (!names.length) return "";
+  const loaded = new Set(selectMemories().files.filter((f) => f.loaded).map((f) => f.name));
+  const shown = names.slice(0, limit);
+  const lines = shown.map((name) => {
+    const s = memorySummary(name);
+    return "- " + name + (loaded.has(name) ? " [loaded below]" : "") + (s ? " — " + s : "");
+  });
+  const extra = names.length > shown.length ? "\n(+" + (names.length - shown.length) + " older not shown — `manage_memory` list to see all)" : "";
+  return lines.join("\n") + extra;
+}
+
 // The exact text block injected into the system prompt (loader.js uses this).
 export function buildMemoryText() {
   const { files } = selectMemories();
