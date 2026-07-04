@@ -533,11 +533,21 @@ export async function handleMessage(content, authorId, channel, author, message,
     }
     if (ref) {
       const botUserId = message.client && message.client.user ? message.client.user.id : null;
-      const who = ref.author && ref.author.id === botUserId ? "you" : ((ref.member && ref.member.displayName) || (ref.author && ref.author.username) || "someone");
-      let refText = (ref.content || "").trim();
-      if (!refText) refText = (ref.attachments && ref.attachments.size) ? "[attachment]" : ((ref.embeds && ref.embeds.length) ? "[embed]" : "[no text]");
-      if (refText.length > 600) refText = refText.slice(0, 600) + "…";
-      replyPrefix = "[in reply to " + who + ": \"" + refText + "\"]\n";
+      const nameOf = (m) => (m.author && m.author.id === botUserId) ? "you" : ((m.member && m.member.displayName) || (m.author && m.author.username) || "someone");
+      const textOf = (m) => {
+        let t = (m.content || "").trim();
+        if (!t) t = (m.attachments && m.attachments.size) ? "[attachment]" : ((m.embeds && m.embeds.length) ? "[embed]" : "[no text]");
+        return t.length > 400 ? t.slice(0, 400) + "…" : t;
+      };
+      // Pull a little of the conversation LEADING UP to the replied-to message so the
+      // model has the surrounding context, especially when replying to an OLD message.
+      let leadup = [];
+      try {
+        const before = await ref.channel.messages.fetch({ before: ref.id, limit: 4 });
+        leadup = [...before.values()].reverse().map((m) => nameOf(m) + ": " + textOf(m));
+      } catch { /* can't fetch history — just use the one message */ }
+      const lines = [...leadup, "→ " + nameOf(ref) + ": " + textOf(ref)];
+      replyPrefix = "[you're replying to this message" + (leadup.length ? " (with the messages just before it, for context)" : "") + ":\n" + lines.join("\n") + "\n]\n";
     }
   }
   const textContent = "[" + (author.displayName || author.username) + "]: " + replyPrefix + content;
