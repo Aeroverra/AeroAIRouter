@@ -70,7 +70,11 @@ function matchesMode(ch, message, botId) {
 
   const mentioned = message.mentions.users.has(botId);
   const repliedUser = message.mentions.repliedUser;
-  const repliedToBot = (repliedUser && repliedUser.id === botId) || (!!message.reference && mentioned);
+  // message.__repliedTo is the resolved referenced message (set in the messageCreate
+  // handler). Check its author so a reply to an OLD bot message counts even when the
+  // reply doesn't ping the bot.
+  const ref = message.__repliedTo;
+  const repliedToBot = (ref && ref.author && ref.author.id === botId) || (repliedUser && repliedUser.id === botId) || (!!message.reference && mentioned);
 
   if (ch.mode === "mention") return mentioned || repliedToBot;
 

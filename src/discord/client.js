@@ -185,7 +185,7 @@ export function createDiscordClient() {
     setupJoinWatcher(client);
   });
 
-  client.on("messageCreate", (message) => {
+  client.on("messageCreate", async (message) => {
     if (message.author.id === client.user.id) return;
     if (message.author.bot && !config.discord.people[message.author.id]) return;
     // Ignore Discord SYSTEM messages (pins, joins, boosts, etc.) — they carry no
@@ -209,6 +209,14 @@ export function createDiscordClient() {
         });
         return;
       }
+    }
+
+    // Resolve a reply's referenced message ONCE (from cache, else fetch — works for
+    // old messages too). Used both to reliably detect a reply-to-the-bot and to pull
+    // the replied-to text into context. Stashed on the message for the router + agent.
+    if (message.reference && message.reference.messageId && message.__repliedTo === undefined) {
+      try { message.__repliedTo = message.channel.messages.cache.get(message.reference.messageId) || await message.fetchReference(); }
+      catch { message.__repliedTo = null; }
     }
 
     if (!shouldRespond(message, client.user.id)) return;

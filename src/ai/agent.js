@@ -522,7 +522,25 @@ export async function handleMessage(content, authorId, channel, author, message,
     setPendingMessage(message);
   }
 
-  const textContent = "[" + (author.displayName || author.username) + "]: " + content;
+  // If this message is a reply, pull the replied-to message into context so the model
+  // sees what it's responding to (uses the handler's pre-resolved __repliedTo, else
+  // resolves here — covers boot catch-up and other entry paths).
+  let replyPrefix = "";
+  if (message && message.reference && message.reference.messageId) {
+    let ref = message.__repliedTo;
+    if (ref === undefined) {
+      try { ref = message.channel.messages.cache.get(message.reference.messageId) || await message.fetchReference(); } catch { ref = null; }
+    }
+    if (ref) {
+      const botUserId = message.client && message.client.user ? message.client.user.id : null;
+      const who = ref.author && ref.author.id === botUserId ? "you" : ((ref.member && ref.member.displayName) || (ref.author && ref.author.username) || "someone");
+      let refText = (ref.content || "").trim();
+      if (!refText) refText = (ref.attachments && ref.attachments.size) ? "[attachment]" : ((ref.embeds && ref.embeds.length) ? "[embed]" : "[no text]");
+      if (refText.length > 600) refText = refText.slice(0, 600) + "…";
+      replyPrefix = "[in reply to " + who + ": \"" + refText + "\"]\n";
+    }
+  }
+  const textContent = "[" + (author.displayName || author.username) + "]: " + replyPrefix + content;
   // Persist images as real vision blocks (not just a text description) so later
   // turns that refer back to an earlier image can still see it. enforceImageBudget
   // caps how many recent images stay hydrated.
