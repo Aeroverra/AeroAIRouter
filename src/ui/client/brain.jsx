@@ -22,8 +22,7 @@ export function MemoriesView({ navigate }) {
     catch (ex) { toast(ex.message, "bad"); }
   }
   function openNew() {
-    const d = new Date().toISOString().slice(0, 10);
-    setEditing({ name: d + "-note.md", content: "", isNew: true });
+    setEditing({ name: "new-note.md", content: "", isNew: true });
   }
   async function save() {
     if (!editing) return;
@@ -41,6 +40,10 @@ export function MemoriesView({ navigate }) {
     try { await api("DELETE", "/api/memories/" + encodeURIComponent(name)); toast("Deleted " + name); await load(); }
     catch (ex) { toast(ex.message, "bad"); }
   }
+  async function togglePin(f, pinned) {
+    try { await api("POST", "/api/memories/" + encodeURIComponent(f.name) + "/pin", { pinned }); toast(pinned ? "Pinned — always in the prompt." : "Unpinned — read on demand."); await load(); }
+    catch (ex) { toast(ex.message, "bad"); }
+  }
 
   if (editing) {
     return (
@@ -48,8 +51,8 @@ export function MemoriesView({ navigate }) {
         <Btn variant="ghost" onClick={() => setEditing(null)}>← All memories</Btn>
         <div class="page-head" style="margin-top:8px"><h1>{editing.isNew ? "New memory" : editing.name}</h1></div>
         {editing.isNew && (
-          <Field label="File name" hint="Use a date prefix (YYYY-MM-DD-) so recent notes stay in the loaded window. .md is added automatically.">
-            <TextInput value={editing.name} onInput={(v) => setEditing((e) => ({ ...e, name: v }))} placeholder="2026-07-03-topic.md" />
+          <Field label="File name" hint="Name it by TOPIC, e.g. proxmox-setup.md — not a date. .md is added automatically. Use the Pin toggle on the list to keep a note always in the prompt.">
+            <TextInput value={editing.name} onInput={(v) => setEditing((e) => ({ ...e, name: v }))} placeholder="proxmox-setup.md" />
           </Field>
         )}
         <Field label="Content" hint="Markdown. Injected verbatim into the bot's system prompt.">
@@ -67,7 +70,7 @@ export function MemoriesView({ navigate }) {
       <div class="page-head page-head-row">
         <div>
           <h1>Memories</h1>
-          <p class="sub">The bot's long-term notes. It writes these itself as it learns (via its <code>manage_memory</code> tool) and they're injected into its system prompt on every run — you can add, edit, or prune them here. Changes apply live, no restart.</p>
+          <p class="sub">The bot's long-term notes — it writes these itself as it learns (via <code>manage_memory</code>). Every note is listed in an always-on index; <b>pinned</b> notes are injected into the prompt in full on every message, and the rest are read on demand when a topic is relevant. Toggle the <b>Pin</b> switch to control that. Changes apply live, no restart.</p>
         </div>
         <Btn variant="primary" icon="plus" onClick={openNew}>New memory</Btn>
       </div>
@@ -78,7 +81,7 @@ export function MemoriesView({ navigate }) {
         <p class="hint" style="margin-top:6px">Your hand-written <code>memory.md</code> is always loaded in full as long-term memory. Edit it on the Persona tab. The notes below are the bot's own rolling memory.</p>
       </Card>
 
-      {b && <p class="hint" style="margin-bottom:10px">Loaded into the prompt: <b>{files.filter((f) => f.loaded).length}</b> of up to {b.maxFiles} most-recent files · <b>{Math.round(b.usedBytes / 1024)}KB</b> / {Math.round(b.maxBytes / 1024)}KB budget.</p>}
+      {b && <p class="hint" style="margin-bottom:10px"><b>{files.filter((f) => f.pinned).length}</b> pinned (in the prompt, <b>{Math.round(b.usedBytes / 1024)}KB</b> / {Math.round(b.maxBytes / 1024)}KB budget) · <b>{files.filter((f) => !f.pinned).length}</b> read on demand from the index.</p>}
 
       {err && <p class="field-err">{err}</p>}
       {!data ? <p class="hint"><Spinner size={13} /> Loading…</p> : files.length === 0 ? (
@@ -90,13 +93,14 @@ export function MemoriesView({ navigate }) {
               <div class="row">
                 <Icon name="note" size={16} />
                 <strong class="mono" style="font-size:13px">{f.name}</strong>
-                {f.loaded ? <Badge kind="set">loaded</Badge> : <span class="badge off" title={f.reason}>skipped</span>}
+                {f.loaded ? <Badge kind="set">in prompt</Badge> : (f.pinned ? <span class="badge off" title={f.reason}>over budget</span> : <span class="faint caption">on demand</span>)}
                 <span class="faint caption">{Math.round(f.bytes / 1024) || "<1"}KB</span>
                 <span class="spacer" />
+                <Switch size="sm" checked={f.pinned} onChange={(v) => togglePin(f, v)} label={f.pinned ? "pinned" : "pin"} />
                 <Btn variant="secondary" size="sm" onClick={() => openEdit(f.name)}>Edit</Btn>
                 <IconBtn name="trash" label="Delete" onClick={() => del(f.name)} />
               </div>
-              {!f.loaded && <p class="hint" style="margin-top:6px">Not in the prompt: {f.reason}.</p>}
+              {f.pinned && !f.loaded && <p class="hint" style="margin-top:6px">{f.reason}.</p>}
             </Card>
           ))}
         </div>

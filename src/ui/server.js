@@ -588,6 +588,10 @@ export function createApp() {
     try { memstore.deleteMemory(req.params.name); res.json({ ok: true }); }
     catch (err) { res.status(400).json({ error: err.message }); }
   });
+  app.post("/api/memories/:name/pin", requireAuth, requireCsrf, (req, res) => {
+    try { const name = memstore.setMemoryPinned(req.params.name, !!(req.body && req.body.pinned)); res.json({ ok: true, name }); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
 
   // ---- credentials (user-managed free-form logins/keys; AIROUTER_HOME/credentials/credentials.json) ----
   // Values are returned in the clear — this is the admin-authed panel, same posture as

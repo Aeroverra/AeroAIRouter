@@ -48,16 +48,16 @@ export function selectMemories() {
     // Only PINNED memories go into the prompt in full; the rest are read on demand
     // (they're still listed, with summaries, in the always-loaded index).
     if (!isPinned(name)) {
-      out.push({ name, bytes, modified, loaded: false, reason: "read on demand (not pinned)" });
+      out.push({ name, bytes, modified, pinned: false, loaded: false, reason: "read on demand (not pinned)" });
       continue;
     }
     const entryBytes = ("--- " + name + " ---\n").length + bytes; // wrapper the loader adds
     if (usedBytes + entryBytes > MAX_MEMORY_BYTES) {
-      out.push({ name, bytes, modified, loaded: false, reason: "pinned but over the " + Math.round(MAX_MEMORY_BYTES / 1000) + "KB budget" });
+      out.push({ name, bytes, modified, pinned: true, loaded: false, reason: "pinned but over the " + Math.round(MAX_MEMORY_BYTES / 1000) + "KB budget" });
       continue;
     }
     usedBytes += entryBytes;
-    out.push({ name, bytes, modified, loaded: true, reason: null });
+    out.push({ name, bytes, modified, pinned: true, loaded: true, reason: null });
   }
   return { files: out, usedBytes };
 }
@@ -98,6 +98,28 @@ export function isPinned(name) {
     const fm = /^---\n([\s\S]*?)\n---/.exec(head);
     return !!(fm && /(?:^|\n)\s*pinned:\s*true\b/i.test(fm[1]));
   } catch { return false; }
+}
+
+// Pin/unpin a memory by adding or removing `pinned: true` in its frontmatter block.
+export function setMemoryPinned(name, pinned) {
+  const safe = safeMemoryName(name);
+  const path = join(MEMORY_DIR, safe);
+  let content = readFileSync(path, "utf8");
+  const fm = /^---\n([\s\S]*?)\n---\n?/.exec(content);
+  if (pinned) {
+    if (fm) {
+      if (/(?:^|\n)\s*pinned:\s*true\b/i.test(fm[1])) return safe; // already pinned
+      content = "---\n" + fm[1].replace(/\s*$/, "") + "\npinned: true\n---\n" + content.slice(fm[0].length);
+    } else {
+      content = "---\npinned: true\n---\n\n" + content;
+    }
+  } else {
+    if (!fm) return safe; // nothing to unpin
+    const body = fm[1].split("\n").filter((l) => !/^\s*pinned:\s*true\s*$/i.test(l)).join("\n").trim();
+    content = body ? "---\n" + body + "\n---\n" + content.slice(fm[0].length) : content.slice(fm[0].length).replace(/^\n+/, "");
+  }
+  writeFileSync(path, content, "utf8");
+  return safe;
 }
 
 // Compact index of EVERY memory (name + summary), newest first, so the model always
