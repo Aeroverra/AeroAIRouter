@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { acquireFileLock, getFileOwner } from "./file-lock.js";
 import { AttachmentBuilder } from "discord.js";
-import { readChannelMessages } from "../discord/history.js";
+import { readChannelMessages, searchChannelMessages } from "../discord/history.js";
 import { readCredentials } from "./credentials.js";
 import { reviewCommand } from "./command-review.js";
 import { addTask, listTasks, updateTask, deleteTask } from "./task-queue.js";
@@ -21,6 +21,11 @@ import config from "../config/index.js";
 let pendingSubagentMessage = null;
 export function setPendingMessage(msg) {
   pendingSubagentMessage = msg;
+}
+// The channel of the message currently being handled — lets channel-scoped tools
+// (read/search messages) default to "here" when no channel_id is given.
+function pendingChannelId() {
+  return (pendingSubagentMessage && pendingSubagentMessage.channel && pendingSubagentMessage.channel.id) || null;
 }
 
 let _blockedChannelId = null;
@@ -115,14 +120,35 @@ export const toolSchemas = [
   },
   {
     name: "read_discord_messages",
-    description: "Read recent messages from a Discord channel.",
+    description: "Read a window of messages from a Discord channel. By default reads the most recent, but pass before/after/around to page into OLDER history (each accepts a message ID or an ISO date like \"2026-05-01\"). author/contains filter the window. To find something specific deep in old history, use search_discord_messages instead.",
     input_schema: {
       type: "object",
       properties: {
-        channel_id: { type: "string", description: "Discord channel ID" },
-        limit: { type: "number", description: "Messages to fetch (default 25, max 50)" },
+        channel_id: { type: "string", description: "Channel ID (defaults to the current channel)" },
+        limit: { type: "number", description: "Messages to fetch (default 25, max 100)" },
+        before: { type: "string", description: "Only messages before this point — a message ID or ISO date. Use to read older history." },
+        after: { type: "string", description: "Only messages after this point — a message ID or ISO date." },
+        around: { type: "string", description: "Messages around this point — a message ID or ISO date." },
+        author: { type: "string", description: "Filter to an author (id or name substring)." },
+        contains: { type: "string", description: "Filter to messages whose text contains this." },
       },
-      required: ["channel_id"],
+      required: [],
+    },
+  },
+  {
+    name: "search_discord_messages",
+    description: "Search back through a channel's history for messages matching a keyword and/or author — use this when what you need is OLDER than the recent messages you already have. Pages backward through history (Discord doesn't give bots a real search API), so scanning far back takes a moment; narrow with author/before/after and a specific query. Returns matches with timestamps.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Text to look for in message content (case-insensitive)." },
+        author: { type: "string", description: "Restrict to an author (id or name substring)." },
+        channel_id: { type: "string", description: "Channel to search (defaults to the current channel)." },
+        before: { type: "string", description: "Start searching before this point (message ID or ISO date)." },
+        after: { type: "string", description: "Stop searching once older than this point (message ID or ISO date)." },
+        max_scan: { type: "number", description: "How many messages back to scan (default 300, max 1500)." },
+      },
+      required: [],
     },
   },
   {
@@ -482,8 +508,22 @@ export function executeTool(name, input, discordClient, callerAgent) {
         });
       });
     }
-    case "read_discord_messages":
-      return readChannelMessages(input.channel_id, Math.min(input.limit || 25, 50));
+    case "read_discord_messages": {
+      const chan = input.channel_id || pendingChannelId();
+      if (!chan) return "No channel_id given and no current channel.";
+      return readChannelMessages(chan, Math.min(input.limit || 25, 100), {
+        before: input.before, after: input.after, around: input.around,
+        author: input.author, contains: input.contains,
+      });
+    }
+    case "search_discord_messages": {
+      const chan = input.channel_id || pendingChannelId();
+      if (!chan) return "No channel_id given and no current channel.";
+      return searchChannelMessages(chan, {
+        query: input.query, author: input.author,
+        before: input.before, after: input.after, maxScan: input.max_scan,
+      });
+    }
     case "get_credentials":
       return { success: true, content: readCredentials(input.service || "") };
     case "task_manage": {

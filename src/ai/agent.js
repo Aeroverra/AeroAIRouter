@@ -35,6 +35,7 @@ const TOOL_LABELS = {
   list_agents: "Checking agents",
   message_agent: "Messaging agent",
   read_discord_messages: "Reading messages",
+  search_discord_messages: "Searching history",
   task_manage: "Managing tasks",
 };
 
