@@ -2,7 +2,7 @@
 // a task by id (see task-store.js) and is either recurring (a 5-field cron, UTC) or
 // one-off (an ISO-UTC runAt). Also drains the "run now" queue the config UI writes.
 // Everything is stored/evaluated in UTC; the UI converts to the viewer's local time.
-import { readSchedules, writeSchedules, setScheduleStatus, drainRunQueue } from "./task-store.js";
+import { readSchedules, writeSchedules, setScheduleStatus, drainRunQueue, resetRunningTasks } from "./task-store.js";
 import { runTask } from "./tasks.js";
 
 let ticking = false;
@@ -91,6 +91,7 @@ async function drain() {
 }
 
 export function initScheduler() {
+  resetRunningTasks(); // any task still "running" in the store died with the last process
   const n = readSchedules().length;
   console.log("[cron] Scheduler initialized (" + n + " schedule(s), UTC)");
   if (tickTimer) clearInterval(tickTimer);

@@ -13,14 +13,27 @@ export function TasksView() {
   const [err, setErr] = useState(null);
   const [editing, setEditing] = useState(null); // task object, or { _new: true }
   const [busy, setBusy] = useState("");
+  const [openLog, setOpenLog] = useState(""); // task id whose log is expanded
 
   async function load() { try { const r = await api("GET", "/api/tasks"); setTasks(r.tasks || []); setErr(null); } catch (ex) { setErr(ex.message); } }
   useEffect(() => { load(); }, []);
 
+  // While any task is running, poll the list so the running badge / log update live.
+  const anyRunning = !!(tasks && tasks.some((t) => t.lastStatus === "running"));
+  useEffect(() => {
+    if (!anyRunning) return;
+    const iv = setInterval(load, 2000);
+    return () => clearInterval(iv);
+  }, [anyRunning]);
+
   async function run(t) {
     setBusy(t.id);
-    try { await api("POST", "/api/tasks/" + t.id + "/run"); toast("Queued \"" + t.name + "\" to run"); setTimeout(load, 2500); }
-    catch (ex) { toast(ex.message, "bad"); }
+    try {
+      await api("POST", "/api/tasks/" + t.id + "/run");
+      toast("Queued \"" + t.name + "\" to run");
+      setOpenLog(t.id); // reveal the log so the user sees it start
+      setTimeout(load, 1500); setTimeout(load, 4000); // bridge until the running-poll takes over
+    } catch (ex) { toast(ex.message, "bad"); }
     setBusy("");
   }
   async function duplicate(t) { try { await api("POST", "/api/tasks/" + t.id + "/duplicate"); toast("Duplicated"); load(); } catch (ex) { toast(ex.message, "bad"); } }
@@ -38,23 +51,58 @@ export function TasksView() {
       <div class="row" style="margin-bottom:12px"><Btn variant="primary" icon="plus" onClick={() => setEditing({ _new: true, type: "agent", postOutput: true })}>New task</Btn></div>
       {!tasks ? <p class="hint"><Spinner size={13} /> Loading…</p> :
         !tasks.length ? <p class="empty">No tasks yet.</p> :
-        <div class="rows">{tasks.map((t) => (
+        <div class="rows">{tasks.map((t) => {
+          const running = t.lastStatus === "running";
+          return (
           <Card class="card-pad">
             <div class="row">
               <strong>{t.name}</strong>
               <Badge kind={t.type === "command" ? "brand" : undefined}>{t.type}</Badge>
-              {t.lastStatus && <StatusBadge status={t.lastStatus === "ok" ? "connected" : "error"} error={t.lastError} />}
+              {running
+                ? <span class="row-tight" style="gap:5px;color:var(--accent,#4a9eff);font-size:12px;font-weight:600"><Spinner size={12} />running</span>
+                : t.lastStatus && <StatusBadge status={t.lastStatus === "ok" ? "connected" : "error"} error={t.lastError} />}
               <span class="spacer" />
-              <Btn variant="primary" size="sm" loading={busy === t.id} onClick={() => run(t)}>Run now</Btn>
+              <Btn variant="primary" size="sm" loading={busy === t.id} disabled={running} onClick={() => run(t)}>Run now</Btn>
+              <Btn variant="secondary" size="sm" onClick={() => setOpenLog((v) => (v === t.id ? "" : t.id))}>{openLog === t.id ? "Hide log" : "Log"}</Btn>
               <Btn variant="secondary" size="sm" onClick={() => setEditing(t)}>Edit</Btn>
               <Btn variant="ghost" size="sm" onClick={() => duplicate(t)}>Duplicate</Btn>
               <IconBtn name="trash" label="Delete" onClick={() => del(t)} />
             </div>
             {t.description && <p class="pc-desc">{t.description}</p>}
-            <p class="hint" style="margin-top:4px">{t.channelId ? "→ channel " + t.channelId + " · " : ""}last run {fmtWhen(t.lastRunAt)}{t.lastStatus ? " (" + t.lastStatus + ")" : ""}</p>
-            {t.lastOutput && <p class="hint mono" style="white-space:pre-wrap;max-height:80px;overflow:auto">{t.lastOutput}</p>}
+            <p class="hint" style="margin-top:4px">
+              {t.channelId ? "→ channel " + t.channelId + " · " : ""}
+              {running ? "started " + fmtWhen(t.lastRunAt) : <>last run {fmtWhen(t.lastRunAt)}{t.lastStatus ? " (" + t.lastStatus + ")" : ""}</>}
+            </p>
+            {openLog === t.id && <TaskLog id={t.id} running={running} />}
           </Card>
-        ))}</div>}
+          );
+        })}</div>}
+    </div>
+  );
+}
+
+// Tails a task's log. Fetches once on open; while the task is running, polls every
+// 2s so you see the output stream in. When it stops running, one final fetch grabs
+// the completed log, then polling stops.
+function TaskLog({ id, running }) {
+  const [log, setLog] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try { const r = await api("GET", "/api/tasks/" + id + "/log"); if (alive) setLog(r.log || ""); }
+      catch { /* transient; keep last */ }
+    };
+    tick();
+    if (!running) return () => { alive = false; };
+    const iv = setInterval(tick, 2000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [id, running]);
+
+  return (
+    <div style="margin-top:8px">
+      {log == null ? <p class="hint"><Spinner size={12} /> loading log…</p>
+        : log.trim() === "" ? <p class="hint">No output{running ? " yet…" : "."}</p>
+        : <pre class="mono" style="max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.28);padding:10px;border-radius:6px;font-size:12px;margin:0">{log}</pre>}
     </div>
   );
 }

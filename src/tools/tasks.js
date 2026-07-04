@@ -3,7 +3,7 @@
 // a shell command). Output is optional — a task may do its work silently (e.g. an
 // OSRS xp checker that only posts on a gain). Only imported by the bot process
 // (needs the Discord client + agent); the UI never imports this.
-import { getTask, setTaskStatus } from "./task-store.js";
+import { getTask, setTaskStatus, markTaskRunning, appendTaskLog } from "./task-store.js";
 import config from "../config/index.js";
 
 const running = new Set();
@@ -29,8 +29,8 @@ function runCommand(t) {
     const { spawn } = await import("child_process");
     const chunks = [];
     const proc = spawn("/bin/bash", ["-c", t.body], { stdio: ["ignore", "pipe", "pipe"], detached: true });
-    proc.stdout.on("data", (d) => chunks.push(d));
-    proc.stderr.on("data", (d) => chunks.push(d));
+    proc.stdout.on("data", (d) => { chunks.push(d); appendTaskLog(t.id, d.toString("utf8")); });
+    proc.stderr.on("data", (d) => { chunks.push(d); appendTaskLog(t.id, d.toString("utf8")); });
     const killTimer = setTimeout(() => { try { process.kill(-proc.pid, "SIGKILL"); } catch { try { proc.kill("SIGKILL"); } catch {} } }, 10 * 60 * 1000);
     proc.on("close", async (code) => {
       clearTimeout(killTimer);
@@ -56,6 +56,7 @@ async function runAgent(t) {
   // instruct the model to return nothing when there's nothing to report.
   const result = await handleMessage(t.body, config.discord.ownerId, channel, fakeAuthor, null);
   const text = (result || "").trim();
+  appendTaskLog(t.id, text || "(no message)");
   if (text && t.postOutput) await postToChannel(t.channelId, text);
   return text || "(no message)";
 }
@@ -65,6 +66,7 @@ export async function runTask(id, opts = {}) {
   if (!t) return { success: false, error: "Task not found" };
   if (running.has(id)) return { success: false, error: "Task already running" };
   running.add(id);
+  markTaskRunning(id);
   console.log("[tasks] Running task \"" + t.name + "\" (" + t.type + ", " + (opts.source || "manual") + ")");
   try {
     const output = t.type === "command" ? await runCommand(t) : await runAgent(t);

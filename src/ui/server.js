@@ -629,6 +629,12 @@ export function createApp() {
   });
   // "run now" is enqueued for the bot process (the UI can't execute tasks itself).
   app.post("/api/tasks/:id/run", requireAuth, requireCsrf, (req, res) => { taskstore.enqueueRun("task", req.params.id); res.json({ ok: true, queued: true }); });
+  // Live/last-run output: the bot streams a task's stdout+stderr to a log file; this
+  // tails it. Polled by the UI while a task is running to show the log so far.
+  app.get("/api/tasks/:id/log", requireAuth, (req, res) => {
+    const t = taskstore.getTask(req.params.id);
+    res.json({ log: taskstore.readTaskLog(req.params.id), running: !!(t && t.lastStatus === "running") });
+  });
 
   // ---- schedules (fire tasks on a cron/one-off; times stored/run in UTC) ----
   app.get("/api/schedules", requireAuth, (req, res) => res.json({ schedules: taskstore.listSchedules() }));

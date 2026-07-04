@@ -3,7 +3,7 @@
 // this to CRUD the same JSON files — that's the IPC. The bot ALSO executes tasks
 // (see tasks.js) and runs the cron engine (scheduler.js); the UI only does CRUD +
 // enqueues "run now" requests here. No Discord/agent imports live in this module.
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
 // Use the pure paths module (no side effects) so the config-UI server can import
@@ -13,6 +13,7 @@ import { DATA_DIR } from "../config/paths.js";
 const TASKS_FILE = join(DATA_DIR, "tasks.json");
 const SCHEDULES_FILE = join(DATA_DIR, "schedules.json");
 const RUNQ_FILE = join(DATA_DIR, "run-queue.json");
+const TASKLOG_DIR = join(DATA_DIR, "task-logs");
 
 function readJson(file, fallback) {
   if (!existsSync(file)) return fallback;
@@ -35,8 +36,8 @@ export function taskSummary(t) {
   return {
     id: t.id, name: t.name, description: t.description || "", type: t.type,
     body: t.body || "", channelId: t.channelId || "", postOutput: t.postOutput !== false,
-    createdAt: t.createdAt, lastRunAt: t.lastRunAt || null, lastStatus: t.lastStatus || null,
-    lastError: t.lastError || null, lastOutput: (t.lastOutput || "").slice(0, 600),
+    createdAt: t.createdAt, lastRunAt: t.lastRunAt || null, lastFinishedAt: t.lastFinishedAt || null,
+    lastStatus: t.lastStatus || null, lastError: t.lastError || null, lastOutput: (t.lastOutput || "").slice(0, 600),
   };
 }
 export function listTasks() { return readTasks().map(taskSummary); }
@@ -69,12 +70,46 @@ export function duplicateTask(id) {
   const copy = { ...t, id: randomUUID(), name: t.name + " (copy)", createdAt: nowIso(), updatedAt: nowIso(), lastRunAt: null, lastStatus: null, lastError: null, lastOutput: "" };
   tasks.push(copy); writeTasks(tasks); return copy;
 }
-// Merge run status without clobbering concurrent edits (re-reads first).
+// Mark a task as started: status "running", stamp the start time, clear the prior
+// error, and truncate its live log. The UI (separate process) reads this from
+// tasks.json to show "running now" and streams the log via readTaskLog.
+export function markTaskRunning(id) {
+  const tasks = readTasks(); const t = tasks.find((x) => x.id === id); if (!t) return;
+  t.lastStatus = "running"; t.lastRunAt = nowIso(); t.lastError = null; writeTasks(tasks);
+  truncateTaskLog(id);
+}
+// Merge final run status without clobbering concurrent edits (re-reads first).
+// lastRunAt is left as the START time set by markTaskRunning.
 export function setTaskStatus(id, status, error, output) {
   const tasks = readTasks(); const t = tasks.find((x) => x.id === id); if (!t) return;
-  t.lastRunAt = nowIso(); t.lastStatus = status; t.lastError = error || null;
+  t.lastStatus = status; t.lastError = error || null; t.lastFinishedAt = nowIso();
   if (output != null) t.lastOutput = String(output).slice(0, 4000);
   writeTasks(tasks);
+}
+// Clear stale "running" flags left by a bot that died mid-task (called at boot).
+export function resetRunningTasks() {
+  const tasks = readTasks(); let changed = false;
+  for (const t of tasks) if (t.lastStatus === "running") { t.lastStatus = "error"; t.lastError = "Interrupted (bot restarted)"; changed = true; }
+  if (changed) writeTasks(tasks);
+}
+
+// --------------------------------------------------------- per-task logs -----
+// A task's live/last-run output streams to data/task-logs/<id>.log so the UI can
+// tail it while the task runs (command stdout+stderr) or read it afterward.
+function taskLogPath(id) { return join(TASKLOG_DIR, id + ".log"); }
+export function truncateTaskLog(id) {
+  try { mkdirSync(TASKLOG_DIR, { recursive: true }); writeFileSync(taskLogPath(id), "", "utf8"); } catch { /* ignore */ }
+}
+export function appendTaskLog(id, str) {
+  if (!str) return;
+  try { mkdirSync(TASKLOG_DIR, { recursive: true }); appendFileSync(taskLogPath(id), str); } catch { /* ignore */ }
+}
+export function readTaskLog(id, maxBytes = 40000) {
+  try {
+    const p = taskLogPath(id); if (!existsSync(p)) return "";
+    const buf = readFileSync(p);
+    return buf.length > maxBytes ? "…(earlier output truncated)…\n" + buf.slice(buf.length - maxBytes).toString("utf8") : buf.toString("utf8");
+  } catch { return ""; }
 }
 
 // ------------------------------------------------------------ Schedules ------
