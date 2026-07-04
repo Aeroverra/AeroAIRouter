@@ -6,7 +6,7 @@ import { tryCommand } from "./commands.js";
 import { handleMessage } from "../ai/agent.js";
 import { setupPresenceWatcher, setupJoinWatcher } from "./presence.js";
 import { markResponded, hasResponded } from "../tools/responded-cache.js";
-import { getThreadToAgent, injectThreadMessage } from "./subagent.js";
+import { getThreadToAgent, injectThreadMessage, sanitizeForDiscord } from "./subagent.js";
 
 let discordClient = null;
 const activeTasks = new Set();
@@ -122,7 +122,8 @@ async function processMessageInternal(message) {
     console.log("[discord] handleMessage returned: " + (reply === null ? "null" : reply === undefined ? "undefined" : "string(" + reply.length + " chars)") + " first50=" + (reply ? JSON.stringify(reply.substring(0, 50)) : "n/a"));
     if (!reply || reply.trim().length === 0) return;
 
-    const chunks = splitMessage(reply);
+    // Redact any leaked secrets / stored credential values before it hits Discord.
+    const chunks = splitMessage(sanitizeForDiscord(reply));
     console.log("[discord] Sending " + chunks.length + " chunk(s) to Discord");
     for (let i = 0; i < chunks.length; i++) {
       if (i === 0) {

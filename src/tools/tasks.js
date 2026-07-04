@@ -11,9 +11,10 @@ const running = new Set();
 async function postToChannel(channelId, text) {
   if (!channelId || !text) return;
   const { getDiscordClient } = await import("../discord/client.js");
+  const { sanitizeForDiscord } = await import("../discord/subagent.js");
   const client = getDiscordClient(); if (!client) return;
   const channel = await client.channels.fetch(channelId).catch(() => null); if (!channel) return;
-  let remaining = String(text);
+  let remaining = sanitizeForDiscord(String(text));
   while (remaining.length > 0) {
     if (remaining.length <= 2000) { await channel.send(remaining).catch(() => {}); break; }
     let splitAt = remaining.lastIndexOf("\n", 2000);

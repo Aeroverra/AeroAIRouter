@@ -9,6 +9,7 @@ import config from "../config/index.js";
 import { compactMessages } from "../ai/context.js";
 import { clearAllFileOwners } from "../tools/file-lock.js";
 import { emojiSuffix } from "../persona.js";
+import { getRedactionValues } from "../tools/credentials-store.js";
 
 let enabled = true;
 const activeAgents = new Map();
@@ -39,6 +40,13 @@ export function sanitizeForDiscord(text) {
     }
     return match;
   });
+  // Also redact the exact value of any stored secret credential field (precise, no
+  // false positives) — belt-and-suspenders on top of the pattern rules above.
+  try {
+    for (const v of getRedactionValues()) {
+      if (v && cleaned.includes(v)) cleaned = cleaned.split(v).join("[REDACTED_CREDENTIAL]");
+    }
+  } catch { /* store unavailable */ }
   return cleaned;
 }
 

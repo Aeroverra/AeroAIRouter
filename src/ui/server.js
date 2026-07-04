@@ -612,6 +612,26 @@ export function createApp() {
     if (!c) return res.status(404).json({ error: "credential not found" });
     res.json({ credential: c });
   });
+  // Full values for one entry (secret fields are masked in the list) — auth + CSRF.
+  app.post("/api/credentials/:id/reveal", requireAuth, requireCsrf, (req, res) => {
+    const c = credstore.revealCredential(req.params.id);
+    if (!c) return res.status(404).json({ error: "credential not found" });
+    res.json({ credential: c });
+  });
+  // Convert a non-sensitive credential (infra notes etc.) into a memory, then remove it.
+  app.post("/api/credentials/:id/to-memory", requireAuth, requireCsrf, (req, res) => {
+    const c = credstore.revealCredential(req.params.id);
+    if (!c) return res.status(404).json({ error: "credential not found" });
+    const lines = ["# " + c.name];
+    if (c.description) lines.push("", c.description);
+    const fields = (c.fields || []).filter((f) => f.label || f.value);
+    if (fields.length) { lines.push(""); for (const f of fields) lines.push("- " + (f.label || "") + (f.value ? ": " + f.value : "")); }
+    if (c.notes) lines.push("", c.notes);
+    const slug = (c.name || "note").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "note";
+    const memName = memstore.writeMemory(slug + ".md", lines.join("\n").trim() + "\n");
+    credstore.deleteCredential(req.params.id);
+    res.json({ ok: true, memory: memName });
+  });
 
   // ---- tasks (executable units the bot/user can run; AIROUTER_HOME/data/tasks.json) ----
   app.get("/api/tasks", requireAuth, (req, res) => res.json({ tasks: taskstore.listTasks() }));
