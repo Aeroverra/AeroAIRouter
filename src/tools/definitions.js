@@ -275,13 +275,14 @@ export const toolSchemas = [
   },
   {
     name: "discord_send",
-    description: "Send a message to any Discord channel, add a reaction to a message, or upload a file.",
+    description: "Send a message to any Discord channel (optionally as a reply to a specific message — adds a jump-link back to it), add a reaction to a message, or upload a file.",
     input_schema: {
       type: "object",
       properties: {
         action: { type: "string", enum: ["send", "react", "upload"], description: "Action to take" },
         channel_id: { type: "string", description: "Discord channel ID" },
         content: { type: "string", description: "Message text (for send/upload)" },
+        reply_to: { type: "string", description: "Message ID to reply to (send/upload) — makes it a Discord reply with a jump-link back to that message. Use to resurface a message you found in history." },
         message_id: { type: "string", description: "Message ID (for react)" },
         emoji: { type: "string", description: "Emoji to react with (unicode or custom markup)" },
         file_path: { type: "string", description: "Absolute path to file to upload" },
@@ -591,13 +592,16 @@ export function executeTool(name, input, discordClient, callerAgent) {
         try {
           const channel = await discordClient.channels.fetch(input.channel_id);
           if (!channel) return { success: false, error: "Channel not found" };
+          const { sanitizeForDiscord } = await import("../discord/subagent.js");
 
           switch (input.action) {
             case "send": {
               const options = {};
-              if (input.content) options.content = input.content;
+              if (input.content) options.content = sanitizeForDiscord(input.content);
               if (input.embed) options.embeds = [input.embed];
               if (!options.content && !options.embeds) return { success: false, error: "Provide content or embed" };
+              // reply_to makes this a Discord reply — a jump-link back to that message.
+              if (input.reply_to) options.reply = { messageReference: input.reply_to, failIfNotExists: false };
               const sent = await channel.send(options);
               return { success: true, message_id: sent.id };
             }
@@ -610,7 +614,9 @@ export function executeTool(name, input, discordClient, callerAgent) {
             case "upload": {
               if (!input.file_path) return { success: false, error: "file_path required" };
               const attachment = new AttachmentBuilder(input.file_path);
-              await channel.send({ content: input.content || "", files: [attachment] });
+              const opts = { content: input.content ? sanitizeForDiscord(input.content) : "", files: [attachment] };
+              if (input.reply_to) opts.reply = { messageReference: input.reply_to, failIfNotExists: false };
+              await channel.send(opts);
               return { success: true };
             }
             default:

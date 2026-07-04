@@ -186,7 +186,7 @@ export async function readChannelMessages(channelId, limit = 25, opts = {}) {
       const time = new Date(m.createdTimestamp).toISOString();
       let attachmentInfo = "";
       if (m.attachments && m.attachments.size > 0) attachmentInfo = await saveAttachments(m);
-      lines.push("[" + time + "] " + name + ": " + m.content + attachmentInfo);
+      lines.push("[" + time + "] " + name + " (id " + m.id + "): " + m.content + attachmentInfo);
     }
     return lines.join("\n");
   } catch (err) {
@@ -224,7 +224,7 @@ export async function searchChannelMessages(channelId, opts = {}) {
         const name = m.author.displayName || m.author.username || "";
         const okAuthor = !author || m.author.id === opts.author || name.toLowerCase().includes(author) || (m.author.username || "").toLowerCase().includes(author);
         const okQuery = !query || (m.content || "").toLowerCase().includes(query);
-        if (okAuthor && okQuery) matches.push("[" + new Date(m.createdTimestamp).toISOString() + "] " + name + ": " + msgText(m).slice(0, 300));
+        if (okAuthor && okQuery) matches.push("[" + new Date(m.createdTimestamp).toISOString() + "] " + name + " (id " + m.id + "): " + msgText(m).slice(0, 300));
       }
       cursor = arr[arr.length - 1].id; // oldest in this batch
       if (batch.size < 100) break; // reached the start of the channel
