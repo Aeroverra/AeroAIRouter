@@ -350,7 +350,7 @@ export const toolSchemas = [
   },
   {
     name: "manage_memory",
-    description: "Your long-term memory: markdown notes. A MEMORY INDEX of ALL of them (name + one-line summary) is always in your prompt, and the most recent are loaded in full — read any other on demand with action \"read\". SAVE a durable fact worth remembering (a preference, a decision, how something works, a person). Use one file PER TOPIC and name it by the topic so you (and the index) can find it later — e.g. user-prefers-X.md, proxmox-setup.md — NOT a bare date. Start each note with a one-line summary/title so the index is meaningful. Actions: save (create/overwrite), append, list (all + summaries + which are loaded), read, delete.",
+    description: "Your long-term memory: markdown notes. A MEMORY INDEX of ALL of them (name + one-line summary) is always in your prompt; only PINNED notes are loaded in full, so READ any other on demand with action \"read\" the moment its topic comes up (the index summary tells you which). SAVE a durable fact worth remembering (a preference, a decision, how something works, a person). One file PER TOPIC, named by the topic so you and the index can find it — e.g. user-prefers-X.md, proxmox-setup.md — NOT a bare date; start it with a one-line summary/title. To keep a note in the prompt on EVERY message (reserve for things needed almost always, e.g. the owner's profile or your own rules), put a frontmatter block `---` / `pinned: true` / `---` at the very top. Actions: save (create/overwrite), append, list (all + summaries + pinned status), read, delete.",
     input_schema: {
       type: "object",
       properties: {

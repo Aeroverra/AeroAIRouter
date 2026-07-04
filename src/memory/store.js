@@ -40,20 +40,20 @@ export function selectMemories() {
   try { names = readdirSync(MEMORY_DIR).filter((f) => f.toLowerCase().endsWith(".md")).sort(); }
   catch { return { files: [], usedBytes: 0 }; }
 
-  const recent = new Set(names.slice(-MAX_MEMORY_FILES));
   const out = [];
   let usedBytes = 0;
   for (const name of names) {
     let bytes = 0, modified = 0;
     try { const st = statSync(join(MEMORY_DIR, name)); bytes = st.size; modified = st.mtimeMs; } catch {}
-    if (!recent.has(name)) {
-      out.push({ name, bytes, modified, loaded: false, reason: "not in the " + MAX_MEMORY_FILES + " most recent" });
+    // Only PINNED memories go into the prompt in full; the rest are read on demand
+    // (they're still listed, with summaries, in the always-loaded index).
+    if (!isPinned(name)) {
+      out.push({ name, bytes, modified, loaded: false, reason: "read on demand (not pinned)" });
       continue;
     }
-    // account for the "--- name ---\n" wrapper the loader adds
-    const entryBytes = ("--- " + name + " ---\n").length + bytes;
+    const entryBytes = ("--- " + name + " ---\n").length + bytes; // wrapper the loader adds
     if (usedBytes + entryBytes > MAX_MEMORY_BYTES) {
-      out.push({ name, bytes, modified, loaded: false, reason: "over the 50KB prompt budget" });
+      out.push({ name, bytes, modified, loaded: false, reason: "pinned but over the " + Math.round(MAX_MEMORY_BYTES / 1000) + "KB budget" });
       continue;
     }
     usedBytes += entryBytes;
@@ -69,17 +69,35 @@ export function memorySummary(name) {
   let content;
   try { content = readMemory(name); } catch { return ""; }
   if (!content) return "";
-  const fm = /description:\s*["']?(.+?)["']?\s*$/m.exec(content.split(/\n---/)[0] || "");
-  if (fm && fm[1].trim()) return fm[1].trim().slice(0, 160);
-  for (const raw of content.split("\n")) {
+  // Strip a leading frontmatter block; prefer its `description:` for the summary.
+  let body = content;
+  const fm = /^---\n([\s\S]*?)\n---\n?/.exec(content);
+  if (fm) {
+    const desc = /(?:^|\n)\s*description:\s*["']?(.+?)["']?\s*(?:\n|$)/.exec(fm[1]);
+    if (desc && desc[1].trim()) return desc[1].trim().slice(0, 160);
+    body = content.slice(fm[0].length);
+  }
+  for (const raw of body.split("\n")) {
     const line = raw.replace(/^#+\s*/, "").replace(/^\s*[-*]\s*/, "").trim();
     if (!line) continue;
     if (/^---/.test(line)) continue;
-    if (/^(name|description|metadata|node_type|type|originSessionId):/i.test(line)) continue;
+    if (/^(name|description|metadata|node_type|type|originSessionId|pinned):/i.test(line)) continue;
     if (/^\d{4}-\d{2}-\d{2}([ T-].*)?$/.test(line) && line.length < 40) continue; // skip bare date/time headings
     return line.slice(0, 160);
   }
   return "";
+}
+
+// A memory is "pinned" — injected into the prompt in full on every run — only if its
+// frontmatter sets `pinned: true`. Everything else stays OUT of the prompt and is read
+// on demand: the model sees it in the always-loaded index and pulls it with
+// manage_memory when the topic comes up (the Claude-Code / progressive-disclosure model).
+export function isPinned(name) {
+  try {
+    const head = readFileSync(join(MEMORY_DIR, name), "utf8").slice(0, 600);
+    const fm = /^---\n([\s\S]*?)\n---/.exec(head);
+    return !!(fm && /(?:^|\n)\s*pinned:\s*true\b/i.test(fm[1]));
+  } catch { return false; }
 }
 
 // Compact index of EVERY memory (name + summary), newest first, so the model always
@@ -95,7 +113,7 @@ export function buildMemoryIndex(limit = 100) {
   const shown = names.slice(0, limit);
   const lines = shown.map((name) => {
     const s = memorySummary(name);
-    return "- " + name + (loaded.has(name) ? " [loaded below]" : "") + (s ? " — " + s : "");
+    return "- " + name + (loaded.has(name) ? " [pinned — in prompt]" : "") + (s ? " — " + s : "");
   });
   const extra = names.length > shown.length ? "\n(+" + (names.length - shown.length) + " older not shown — `manage_memory` list to see all)" : "";
   return lines.join("\n") + extra;

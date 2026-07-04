@@ -42,10 +42,10 @@ export function buildStableSystemPrompt() {
   ];
 
   if (memoryIndex) {
-    parts.push("\n\n# MEMORY INDEX\n\nEvery memory you have, newest first — the name plus what each holds. The most recent are included in full under RECENT SESSION NOTES below; for ANYTHING else (older facts, past decisions, how something works), read it on demand with the manage_memory tool (action \"read\", exact name). Check this index before saying you don't remember something.\n\n" + memoryIndex);
+    parts.push("\n\n# MEMORY INDEX\n\nEvery memory you have — the name plus a one-line summary of what each holds. Only the ones marked [pinned] are included in full below; for ANYTHING else, READ IT ON DEMAND with the manage_memory tool (action \"read\", exact name) the moment its topic comes up — the summary tells you which to open. Always check this index before saying you don't know or don't remember something.\n\n" + memoryIndex);
   }
   if (recentMemories) {
-    parts.push("\n\n# RECENT SESSION NOTES\n\n" + recentMemories);
+    parts.push("\n\n# PINNED MEMORIES (loaded in full)\n\n" + recentMemories);
   }
 
   // Enabled skills: only name + description here (loaded in full on demand via
