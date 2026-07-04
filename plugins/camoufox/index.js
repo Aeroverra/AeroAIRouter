@@ -13,7 +13,7 @@ const __dir = dirname(fileURLToPath(import.meta.url));
 export const meta = {
   name: "camoufox",
   label: "Camoufox",
-  description: "Stealth-browser fallback for anti-bot-protected sites. When web_fetch is blocked (Cloudflare / JS challenge), retry the URL with camoufox__fetch_url.",
+  description: "Anti-detect stealth browser (Camoufox). Full interactive control — navigate / click / fill / type / evaluate JS / screenshot / tabs — plus a one-shot fetch_url for when web_fetch is blocked by anti-bot protection.",
 };
 
 export const enabledByDefault = true;
