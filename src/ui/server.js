@@ -17,6 +17,7 @@ import { discoverPlugins, isPluginEnabled, isPluginUninstalled } from "../plugin
 import * as memstore from "../memory/store.js";
 import * as skills from "../skills/loader.js";
 import * as taskstore from "../tools/task-store.js";
+import * as credstore from "../tools/credentials-store.js";
 
 // Live MCP status written by the bot process at startup (DATA_DIR/mcp-status.json).
 function readMcpStatus() {
@@ -586,6 +587,30 @@ export function createApp() {
   app.delete("/api/memories/:name", requireAuth, requireCsrf, (req, res) => {
     try { memstore.deleteMemory(req.params.name); res.json({ ok: true }); }
     catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  // ---- credentials (user-managed free-form logins/keys; AIROUTER_HOME/credentials/credentials.json) ----
+  // Values are returned in the clear — this is the admin-authed panel, same posture as
+  // the secrets reveal endpoint. The bot reads the same store via its get_credentials tool.
+  app.get("/api/credentials", requireAuth, (req, res) => {
+    try { res.json({ credentials: credstore.listCredentials() }); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.post("/api/credentials", requireAuth, requireCsrf, (req, res) => {
+    try { res.json({ credential: credstore.createCredential(req.body || {}) }); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+  app.put("/api/credentials/:id", requireAuth, requireCsrf, (req, res) => {
+    const c = credstore.updateCredential(req.params.id, req.body || {});
+    if (!c) return res.status(404).json({ error: "credential not found" });
+    res.json({ credential: c });
+  });
+  app.delete("/api/credentials/:id", requireAuth, requireCsrf, (req, res) =>
+    res.json({ ok: credstore.deleteCredential(req.params.id) }));
+  app.post("/api/credentials/:id/duplicate", requireAuth, requireCsrf, (req, res) => {
+    const c = credstore.duplicateCredential(req.params.id);
+    if (!c) return res.status(404).json({ error: "credential not found" });
+    res.json({ credential: c });
   });
 
   // ---- tasks (executable units the bot/user can run; AIROUTER_HOME/data/tasks.json) ----

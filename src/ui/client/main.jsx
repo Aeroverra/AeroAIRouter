@@ -8,6 +8,7 @@ import { Btn, IconBtn, Icon, Switch, Spinner, ToastHost, DialogHost } from "./ui
 import { Login, SetupWizard, Dashboard, SchemaSection, RawJson, restartBot, changePassword } from "./views.jsx";
 import { PluginsList, PluginConfig, McpView } from "./plugins.jsx";
 import { MemoriesView, SkillsView } from "./brain.jsx";
+import { CredentialsView } from "./credentials.jsx";
 import { TasksView } from "./tasks.jsx";
 import { SchedulerView } from "./scheduler.jsx";
 
@@ -106,6 +107,7 @@ function Sidebar({ route }) {
       {inGroup("Setup").map((s) => item(s.id, s.title, SECTION_ICONS[s.id]))}
       {item("__memories", "Memories", "note")}
       {item("__skills", "Skills", "spark")}
+      {item("__credentials", "Credentials", "key")}
       <div class="nav-group">Extensions</div>
       {item("__plugins", "Plugins", "plugins")}
       {onPlugins && S.plugins.value.filter((p) => !p.uninstalled && ((p.configSchema || []).length || p.ui || p.hasCheckToken)).map((p) => item("__plugin:" + p.name, p.label || p.name, null, true))}
@@ -124,6 +126,7 @@ function Content({ route }) {
   if (route === "__dash") return <Dashboard navigate={navigate} />;
   if (route === "__memories") return <MemoriesView navigate={navigate} />;
   if (route === "__skills") return <SkillsView />;
+  if (route === "__credentials") return <CredentialsView />;
   if (route === "__plugins") return <PluginsList navigate={navigate} />;
   if (route.startsWith("__plugin:")) return <PluginConfig name={route.slice("__plugin:".length)} navigate={navigate} />;
   if (route === "__mcp") return <McpView />;
