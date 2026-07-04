@@ -12,8 +12,8 @@ export const MEMORY_DIR = join(DATA_DIR, "memory");
 
 // Selection rules for what gets injected into the system prompt. Kept here so the
 // UI can show the SAME loaded/skipped status the bot actually applies.
-export const MAX_MEMORY_BYTES = 50000; // ~12.5K tokens
-export const MAX_MEMORY_FILES = 15;    // most-recent N by name (names are date-prefixed)
+export const MAX_MEMORY_BYTES = 80000; // ~20K tokens — fits the curated topic-memory set
+export const MAX_MEMORY_FILES = 20;    // cap; the memory INDEX (buildMemoryIndex) covers anything beyond this
 
 // Sanitize a memory file name: a single path segment, markdown, safe chars only.
 export function safeMemoryName(name) {
