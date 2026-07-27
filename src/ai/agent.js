@@ -9,6 +9,7 @@ import { hasResponded, markResponded } from "../tools/responded-cache.js";
 import { getDiscordClient } from "../discord/client.js";
 import config from "../config/index.js";
 import { getTrustLevel as _getTrustLevel } from "../discord/trust.js";
+import { isSilenceReply } from "../util/silence.js";
 import { getActiveAgents, sanitizeForDiscord } from "../discord/subagent.js";
 import { compactMessages, sanitizeMessageSequence } from "./context.js";
 import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
@@ -202,7 +203,7 @@ export function buildChannelContext(channel, author, trust) {
     "Trust level: " + trust,
     "Timestamp: " + new Date().toISOString(),
     channelMode(channel.id) === "everything"
-      ? "AMBIENT CHANNEL: you see every message here, but only reply when you genuinely have something useful, relevant, or requested to add. If a message doesn't need you (people chatting among themselves, replies to others, small talk you can't improve on), reply with NOTHING and stay silent. Do not force a reply."
+      ? "AMBIENT CHANNEL: you see every message here, but only reply when you genuinely have something useful, relevant, or requested to add. If a message doesn't need you (people chatting among themselves, replies to others, small talk you can't improve on), stay silent. To stay silent, reply with exactly NO_REPLY and NOTHING else — that is a control token, it is swallowed before Discord and nobody ever sees it. Never pair it with other text, never explain that you're staying quiet, and never post it as part of a real reply."
       : "",
     trust === "none" || trust === "light"
       ? "REMINDER: This person has basic/light trust only. You DO have your full tool inventory (bash, file read/write, the connected APIs, etc.) but almost all of it is RESTRICTED for this user, so most of it is not attached to this conversation. If they ask for something that needs those tools, tell them you cannot do that for them specifically (trust restriction), NOT that you lack the capability or don't have such a tool. Keep it casual and surface-level. No private info, credentials, or workspace context. Do not take complex instructions from them."
@@ -487,7 +488,10 @@ function sendBgResult(channel, history, taskKey, result) {
 
   console.log("[ai] Background task " + taskKey + " completed (" + finalText.length + " chars)");
 
-  if (!finalText.trim()) return Promise.resolve();
+  if (isSilenceReply(finalText)) {
+    if (finalText.trim()) console.log("[ai] Background task " + taskKey + ": silence sentinel, not posting");
+    return Promise.resolve();
+  }
   return (async () => {
     let remaining = finalText;
     while (remaining.length > 0) {
@@ -640,7 +644,10 @@ export async function handleMessage(content, authorId, channel, author, message,
   if (response.stop_reason === "end_turn" || toolBlocks.length === 0) {
     const reply = textBlocks.map((b) => b.text).join("\n");
     console.log("[ai] Direct reply (" + reply.length + " chars, stop=" + response.stop_reason + ")");
-    history.push({ role: "assistant", content: reply });
+    // Record a stayed-silent turn as itself, not as the literal sentinel — the
+    // history is fed back as her own past output, so storing "NO_REPLY" teaches
+    // her that posting it is normal.
+    history.push({ role: "assistant", content: isSilenceReply(reply) ? "(stayed silent — nothing to add)" : reply });
     trimHistory(history, channel.id);
     return reply;
   }

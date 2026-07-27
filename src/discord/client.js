@@ -7,6 +7,7 @@ import { handleMessage } from "../ai/agent.js";
 import { setupPresenceWatcher, setupJoinWatcher } from "./presence.js";
 import { markResponded, hasResponded } from "../tools/responded-cache.js";
 import { getThreadToAgent, injectThreadMessage, sanitizeForDiscord } from "./subagent.js";
+import { isSilenceReply } from "../util/silence.js";
 
 let discordClient = null;
 const activeTasks = new Set();
@@ -120,7 +121,10 @@ async function processMessageInternal(message) {
 
     clearInterval(typingInterval);
     console.log("[discord] handleMessage returned: " + (reply === null ? "null" : reply === undefined ? "undefined" : "string(" + reply.length + " chars)") + " first50=" + (reply ? JSON.stringify(reply.substring(0, 50)) : "n/a"));
-    if (!reply || reply.trim().length === 0) return;
+    if (isSilenceReply(reply)) {
+      if (reply && reply.trim()) console.log("[discord] Silence sentinel — not posting: " + JSON.stringify(reply.trim().slice(0, 40)));
+      return;
+    }
 
     // Redact any leaked secrets / stored credential values before it hits Discord.
     const chunks = splitMessage(sanitizeForDiscord(reply));
