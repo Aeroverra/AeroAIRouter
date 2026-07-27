@@ -9,6 +9,15 @@ import { emojiSuffix } from "../persona.js";
 const CHECK_FILE = join(config.dataDir, "api-health-state.json");
 const CLAUDE_BIN = process.env.CLAUDE_CLI || join(process.env.HOME || "", ".npm-global/bin/claude");
 
+// The billing header carries a per-launch nonce (`cch=`), a fresh 5-hex value on
+// every CLI invocation — it is not a version and there is nothing to copy into
+// our client. Blank it before diffing, or this check reports "UPDATE NEEDED"
+// every single week and asks you to paste a random number into source.
+function stripNonces(billingHeader) {
+  if (!billingHeader) return billingHeader;
+  return String(billingHeader).replace(/cch=[0-9a-f]+;/i, "cch=<per-launch nonce>;");
+}
+
 function loadCurrentHeaders() {
   try {
     const state = JSON.parse(readFileSync(CHECK_FILE, "utf8"));
@@ -113,8 +122,8 @@ export async function runApiHealthCheck() {
           if (JSON.stringify(previous.query) !== JSON.stringify(captured.query)) {
             changes.push(`query params changed: ${JSON.stringify(previous.query)} -> ${JSON.stringify(captured.query)}`);
           }
-          if (previous.billingHeader !== captured.billingHeader) {
-            changes.push(`billing header changed: "${previous.billingHeader}" -> "${captured.billingHeader}"`);
+          if (stripNonces(previous.billingHeader) !== stripNonces(captured.billingHeader)) {
+            changes.push(`billing header changed: "${stripNonces(previous.billingHeader)}" -> "${stripNonces(captured.billingHeader)}"`);
           }
         }
 
@@ -154,8 +163,9 @@ export function formatHealthReport(result) {
   }
 
   const prompt = [
-    "Update the OAuth client headers in src/ai/client.js to match the new headers",
-    "the Claude CLI is now using. Run the health check proxy to capture the exact values.",
+    "Update the OAuth client headers in src/ai/llm-defaults.js (DEFAULT_HEADERS /",
+    "DEFAULT_QUERY / CC_VERSION) to match what the Claude CLI is now sending. Run the",
+    "health check proxy to capture the exact values. Do NOT copy per-launch nonces.",
     "Changes detected:",
     ...result.changes.map((c) => `- ${c}`),
   ].join("\n");
