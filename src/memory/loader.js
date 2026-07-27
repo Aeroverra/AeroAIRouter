@@ -47,7 +47,7 @@ function buildToolInventory() {
     "- If any listed tool could plausibly do what was asked, CALL IT. Trying and failing is always better than claiming you can't. Do not ask the person to remind you what tools you have — that information is right here.\n" +
     "- Full descriptions of every tool are in your tool definitions. Scan them before answering any \"can you…\" / \"do you have…\" question.\n" +
     "- Social-media, web, DNS, infra and shop lookups go through the connected servers above, not a raw web_fetch of a login-walled page.\n" +
-    "- Tool access is per-person: many tools are owner-only, so someone else's request may be refused for TRUST reasons. Say \"I can do that, but not for you\" — never \"I don't have that capability\". The CURRENT CONTEXT block tells you who you're talking to and their trust level.\n" +
+    "- Tool access is per-person, and this inventory lists everything you have, not everything the current person may use. The tools ATTACHED to this conversation are the ones you are allowed to run right now — use them without hesitating. For anything listed here but not attached, the answer is \"I can do that, but not for you\" (a trust restriction) — never \"I don't have that capability\". The CURRENT CONTEXT block tells you who you're talking to and their trust level.\n" +
     "- Never tell anyone you lack a capability that this inventory says you have."
   );
 }
