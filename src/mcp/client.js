@@ -128,6 +128,7 @@ export function addPluginServer(pluginName, spec, opts = {}) {
     plugin: pluginName,
     transport: spec.transport || "stdio",
     spec,
+    description: opts.description || spec.description || "",
     enabled: true,
     managed: true,
     trust: spec.trust || opts.trust || "owner",
@@ -148,6 +149,7 @@ function loadDirectServers() {
       plugin: null,
       transport: s.transport || "stdio",
       spec: s,
+      description: s.description || "",
       enabled: s.enabled !== false,
       managed: false,
       trust: s.trust || "owner",
@@ -223,6 +225,7 @@ function writeStatus() {
       source: s.source,
       plugin: s.plugin,
       transport: s.transport,
+      description: s.description || "",
       enabled: s.enabled,
       managed: s.managed,
       trust: s.trust,
@@ -257,4 +260,32 @@ export async function startMcp() {
 
 export function getMcpServers() {
   return servers;
+}
+
+// A plain-text inventory of every connected server and the exact tool names it
+// registered, for the system prompt. Auto-generated tool names (hikerapi__*,
+// cloudflare__*, ...) carry no meaning on their own, so without this the model
+// only "sees" them buried in 150+ tool schemas and answers capability questions
+// ("do you have an Instagram API?") from the prompt text instead — i.e. denies
+// having tools it is holding. Cheap and cache-stable: built once at startup.
+const MAX_LISTED_TOOLS = 150;
+export function buildMcpPromptSection() {
+  const live = servers.filter((s) => s.status === "connected" && s.tools.length);
+  if (!live.length) return "";
+  const blocks = live.map((s) => {
+    const shown = s.tools.slice(0, MAX_LISTED_TOOLS).map((t) => t.registeredName);
+    const extra = s.tools.length - shown.length;
+    return (
+      "- **" + s.label + "** (" + s.tools.length + " tools" +
+      (s.trust !== "owner" ? ", trust: " + s.trust : "") + ")" +
+      (s.description ? " — " + s.description : "") + "\n" +
+      "  " + shown.join(", ") + (extra > 0 ? ", …and " + extra + " more" : "")
+    );
+  });
+  return (
+    "\n\n## Connected APIs (MCP servers)\n\n" +
+    "These are live and callable RIGHT NOW. What each one does is in its tool descriptions — " +
+    "read those before deciding you can't do something.\n" +
+    blocks.join("\n")
+  );
 }

@@ -373,7 +373,7 @@ export function createApp() {
       out.push({
         name: s.name, label: s.name, source: "direct", managed: false,
         transport: s.transport || "stdio", command: s.command, args: s.args || [],
-        env: s.env || {}, enabled: s.enabled !== false, trust: s.trust || "owner",
+        env: s.env || {}, description: s.description || "", enabled: s.enabled !== false, trust: s.trust || "owner",
         status: l.status || "not running", error: l.error || null, tools: l.tools || [],
       });
     }
@@ -410,6 +410,7 @@ export function createApp() {
       if (s.env && typeof s.env === "object") for (const [k, v] of Object.entries(s.env)) if (k) env[String(k)] = String(v);
       clean.push({
         name, transport: "stdio", command, args, env,
+        description: String(s.description || "").trim().slice(0, 200),
         enabled: s.enabled !== false, trust: ["owner", "elevated", "light"].includes(s.trust) ? s.trust : "owner",
       });
     }

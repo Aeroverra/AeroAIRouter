@@ -48,7 +48,7 @@ export async function loadPlugins() {
           secret: (k) => process.env[k] || "",
         };
         const spec = mod.mcp(ctx);
-        if (spec) { addPluginServer(p.name, spec, { label: p.label }); mcpAdded = true; }
+        if (spec) { addPluginServer(p.name, spec, { label: p.label, description: p.description }); mcpAdded = true; }
       }
       console.log("[plugins] loaded " + p.name + (mcpAdded ? " (+mcp)" : (typeof mod.mcp === "function" ? " (mcp idle — not configured)" : "")));
     } catch (err) {

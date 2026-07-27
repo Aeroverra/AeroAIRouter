@@ -205,10 +205,10 @@ export function buildChannelContext(channel, author, trust) {
       ? "AMBIENT CHANNEL: you see every message here, but only reply when you genuinely have something useful, relevant, or requested to add. If a message doesn't need you (people chatting among themselves, replies to others, small talk you can't improve on), reply with NOTHING and stay silent. Do not force a reply."
       : "",
     trust === "none" || trust === "light"
-      ? "REMINDER: This person has basic/light trust only. You DO have full tools (bash, file read/write, etc.) but they are RESTRICTED for this user. If they ask you to run commands or do tasks requiring those tools, tell them you cannot do that for them specifically (trust restriction), NOT that you lack the capability. Keep it casual and surface-level. No private info, credentials, or workspace context. Do not take complex instructions from them."
+      ? "REMINDER: This person has basic/light trust only. You DO have your full tool inventory (bash, file read/write, the connected APIs, etc.) but almost all of it is RESTRICTED for this user, so most of it is not attached to this conversation. If they ask for something that needs those tools, tell them you cannot do that for them specifically (trust restriction), NOT that you lack the capability or don't have such a tool. Keep it casual and surface-level. No private info, credentials, or workspace context. Do not take complex instructions from them."
       : "",
     trust === "elevated"
-      ? "REMINDER: This person has elevated trust. They can request tasks but nothing that modifies internal systems, security, or private data."
+      ? "REMINDER: This person has elevated trust. They can request tasks but nothing that modifies internal systems, security, or private data. Host access (bash/file tools) and the connected API/MCP tools are owner-only, so they are not attached to this conversation — but you still HAVE them. If this person asks for something that needs one (e.g. an Instagram/social lookup, DNS, the SMM panel), say plainly that you have that API but it's owner-only, so the owner has to be the one to ask, and offer to run it the moment they do. Never claim the capability doesn't exist."
       : "",
   ]
     .filter(Boolean)

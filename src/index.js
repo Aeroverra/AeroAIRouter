@@ -1,5 +1,5 @@
 import { startDiscord, stopDiscord, getDiscordClient } from "./discord/client.js";
-import { startWatching, stopWatching } from "./memory/loader.js";
+import { startWatching, stopWatching, invalidateCache } from "./memory/loader.js";
 import { setDiscordClient, scheduleWeeklyCheck } from "./tools/weekly-check.js";
 import { setWatchdogClient, startWatchdog, stopWatchdog } from "./tools/watchdog.js";
 import { loadCache, pruneCache } from "./tools/responded-cache.js";
@@ -56,6 +56,7 @@ async function start() {
   startWatching();
   await loadPlugins();
   await startMcp(); // after plugins (so plugin MCP servers register) + before messages
+  invalidateCache(); // the tool inventory in the system prompt needs the tools that just registered
   await startDiscord();
 
   const client = getDiscordClient();

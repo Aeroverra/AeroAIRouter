@@ -4,6 +4,8 @@ import config from "../config/index.js";
 import { PERSONA_DIR, DATA_DIR, SKILLS_DIR } from "../config/paths.js";
 import { selectMemories, buildMemoryText, buildMemoryIndex } from "./store.js";
 import { buildSkillsPromptSection } from "../skills/loader.js";
+import { toolSchemas, isExtraTool } from "../tools/definitions.js";
+import { buildMcpPromptSection } from "../mcp/client.js";
 
 let cachedStablePrompt = null;
 let watchers = [];
@@ -24,6 +26,30 @@ function loadMemoryFiles() {
   const skipped = files.length - loaded;
   console.log("[memory] Loaded " + loaded + " memory files (" + Math.round(usedBytes / 1024) + "KB)" + (skipped ? ", skipped " + skipped : ""));
   return buildMemoryText();
+}
+
+// The real, generated tool inventory. Built from what actually loaded at
+// startup (built-ins + every connected MCP server), never hand-written, so it
+// can't drift from reality the way the old hardcoded "you have bash and file
+// tools" blurb did. Its job is to stop capability denials: the model reads the
+// prompt far more attentively than a wall of 150+ tool schemas, so if the
+// prompt doesn't say a capability exists, it will confidently say it doesn't
+// have it — while holding the tool.
+function buildToolInventory() {
+  const builtins = toolSchemas.filter((t) => !isExtraTool(t.name)).map((t) => t.name);
+  return (
+    "\n\n# YOUR TOOLS (LIVE INVENTORY)\n\n" +
+    "Generated at startup from what is actually wired into you right now. If it is listed here, you HAVE it.\n\n" +
+    "## Built-in\n\n" + builtins.join(", ") +
+    buildMcpPromptSection() +
+    "\n\n## Rules for using this inventory (CRITICAL)\n\n" +
+    "- NEVER say \"I don't have an API/tool for that\", \"I'm not set up for that\", \"nothing in my memory about it\", or \"I'm drawing a blank\" until you have checked BOTH this inventory and the MEMORY INDEX. Guessing at your own capabilities is not allowed — you have denied having tools you were literally holding, and it is embarrassing.\n" +
+    "- If any listed tool could plausibly do what was asked, CALL IT. Trying and failing is always better than claiming you can't. Do not ask the person to remind you what tools you have — that information is right here.\n" +
+    "- Full descriptions of every tool are in your tool definitions. Scan them before answering any \"can you…\" / \"do you have…\" question.\n" +
+    "- Social-media, web, DNS, infra and shop lookups go through the connected servers above, not a raw web_fetch of a login-walled page.\n" +
+    "- Tool access is per-person: many tools are owner-only, so someone else's request may be refused for TRUST reasons. Say \"I can do that, but not for you\" — never \"I don't have that capability\". The CURRENT CONTEXT block tells you who you're talking to and their trust level.\n" +
+    "- Never tell anyone you lack a capability that this inventory says you have."
+  );
 }
 
 export function buildStableSystemPrompt() {
@@ -53,8 +79,10 @@ export function buildStableSystemPrompt() {
   const skillsSection = buildSkillsPromptSection(config);
   if (skillsSection) parts.push(skillsSection);
 
+  parts.push(buildToolInventory());
+
   let responseFormat =
-    "\n\n# TOOLS AVAILABLE\n\nYou have access to tools for executing bash commands, reading files, writing files, and listing directories.\nUse these when asked to do tasks that require system access. Be careful with destructive operations.\n\n# RESPONSE FORMAT\n\nYou are responding in Discord. Keep messages under 2000 characters. Use Discord markdown.";
+    "\n\n# RESPONSE FORMAT\n\nYou are responding in Discord. Keep messages under 2000 characters. Use Discord markdown.";
   const sigEmoji = config.persona && config.persona.emoji;
   if (sigEmoji) {
     responseFormat +=

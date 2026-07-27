@@ -332,7 +332,8 @@ export function McpView() {
     registerDirty("mcp", { label: "MCP servers", save: async () => {
       const payload = ref.current.map((s) => ({ name: (s.name || "").trim(), command: (s.command || "").trim(),
         args: (s.argsText || "").split("\n").map((x) => x.trim()).filter(Boolean),
-        env: parseEnv(s.envText || ""), enabled: s.enabled !== false, trust: s.trust || "owner" }));
+        env: parseEnv(s.envText || ""), description: (s.description || "").trim(),
+        enabled: s.enabled !== false, trust: s.trust || "owner" }));
       await api("PUT", "/api/mcp/servers", { servers: payload });
     } });
   }
@@ -356,12 +357,12 @@ export function McpView() {
         {!direct.length && <p class="empty">No custom MCP servers yet.</p>}
       </div>
       <div class="row" style="margin-top:12px">
-        <Btn variant="ghost" icon="plus" onClick={() => { direct.push({ name: "", command: "", argsText: "", envText: "", enabled: true, trust: "owner" }); rerender(); }}>Add MCP server</Btn>
+        <Btn variant="ghost" icon="plus" onClick={() => { direct.push({ name: "", command: "", argsText: "", envText: "", description: "", enabled: true, trust: "owner" }); rerender(); }}>Add MCP server</Btn>
       </div>
     </div>
   );
 }
-function cloneServer(s) { return { name: s.name, command: s.command || "", argsText: (s.args || []).join("\n"), envText: Object.entries(s.env || {}).map(([k, v]) => k + "=" + v).join("\n"), enabled: s.enabled !== false, trust: s.trust || "owner", status: s.status, tools: s.tools }; }
+function cloneServer(s) { return { name: s.name, command: s.command || "", argsText: (s.args || []).join("\n"), envText: Object.entries(s.env || {}).map(([k, v]) => k + "=" + v).join("\n"), description: s.description || "", enabled: s.enabled !== false, trust: s.trust || "owner", status: s.status, tools: s.tools }; }
 function parseEnv(text) { const out = {}; for (const line of text.split("\n")) { const t = line.trim(); if (!t) continue; const eq = t.indexOf("="); if (eq < 1) continue; out[t.slice(0, eq).trim()] = t.slice(eq + 1).trim(); } return out; }
 
 function McpManaged({ s }) {
@@ -375,6 +376,7 @@ function McpEditor({ s, onChange, onRemove }) {
   const [, force] = useState(0); const upd = (k, v) => { s[k] = v; force((n) => n + 1); onChange(); };
   return <Card class="card-pad">
     <div class="row"><TextInput class="grow" placeholder="name (letters/digits/-/_)" value={s.name} onInput={(v) => upd("name", v)} /><StatusBadge status={s.status || "new"} /><IconBtn name="trash" label="Remove server" onClick={onRemove} /></div>
+    <Field label="What it does" hint="One line, shown to the bot in its tool inventory so it knows what this server is for (e.g. &quot;Instagram data: profiles, reels, comments, stories&quot;)."><TextInput value={s.description} onInput={(v) => upd("description", v)} placeholder="one line: what this server is for" /></Field>
     <Field label="Command" hint="The executable to launch (stdio MCP server)."><TextInput value={s.command} onInput={(v) => upd("command", v)} placeholder="command, e.g. npx or node" /></Field>
     <Field label="Arguments" hint="One per line."><Textarea code value={s.argsText} style="min-height:70px" onInput={(v) => upd("argsText", v)} placeholder={"one argument per line\ne.g. -y\n@modelcontextprotocol/server-filesystem"} /></Field>
     <Field label="Environment" hint="KEY=value per line. Reference a secret without storing it here: KEY=${MY_SECRET}."><Textarea code value={s.envText} style="min-height:60px" onInput={(v) => upd("envText", v)} placeholder={"KEY=value, one per line\nuse KEY=${SECRET_NAME} to pull from secrets.env"} /></Field>
