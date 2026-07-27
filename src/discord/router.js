@@ -66,9 +66,25 @@ function isDuplicate(authorId, content) {
 }
 
 function matchesMode(ch, message, botId) {
-  if (ch.mode === "everything") return true; // the model decides whether to actually reply
-
   const mentioned = message.mentions.users.has(botId);
+
+  if (ch.mode === "everything") {
+    // The model decides whether to reply — with one deterministic exception. A
+    // message that @-mentions someone ELSE and never names the bot is aimed at
+    // that person, and asking the model to sit it out is unreliable: told to
+    // stay quiet it tends to answer anyway, or to announce that it's staying
+    // quiet ("that one's for Cadence, not me"), which is still a reply. Same
+    // rule "name" mode already uses below, just applied earlier.
+    if (message.mentions.users.size > 0 && !mentioned) {
+      const wake = (config.discord.wakeWord || "").toLowerCase();
+      const named = wake && (message.content || "").toLowerCase().includes(wake);
+      const replyToBot = (message.__repliedTo && message.__repliedTo.author && message.__repliedTo.author.id === botId)
+        || (message.mentions.repliedUser && message.mentions.repliedUser.id === botId);
+      if (!named && !replyToBot) return false;
+    }
+    return true;
+  }
+
   const repliedUser = message.mentions.repliedUser;
   // message.__repliedTo is the resolved referenced message (set in the messageCreate
   // handler). Check its author so a reply to an OLD bot message counts even when the
