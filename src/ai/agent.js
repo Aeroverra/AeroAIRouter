@@ -262,7 +262,7 @@ function enforceImageBudget(history) {
       if (block && block.type === "image") {
         if (budget > 0) { budget--; return block; }
         changed = true;
-        return { type: "text", text: "[earlier image attachment — no longer in view]" };
+        return { type: "text", text: "[earlier image attachment — dropped from view to save tokens. It is still on disk: the note next to this line has its exact path, use view_image on it to see it again rather than saying you can't.]" };
       }
       return block;
     });

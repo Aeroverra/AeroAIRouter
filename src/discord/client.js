@@ -30,69 +30,41 @@ function splitMessage(text, maxLen = 2000) {
   return chunks;
 }
 
-import { writeFileSync, mkdirSync, existsSync } from "fs";
-
-const UPLOADS_DIR = "/tmp/discord-uploads";
-if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
-
-const TEXT_EXTENSIONS = /\.(txt|json|js|ts|py|md|csv|xml|html|css|yaml|yml|toml|cfg|ini|log|sh|bash|sql|jsx|tsx|c|cpp|h|rs|go|java|rb|php|env|conf|properties|gradle|makefile|dockerfile)$/i;
+import { statSync } from "fs";
+import { attachmentName, isSpoiler, isImageAttachment, isTextAttachment, saveAttachment, imageBlockFromAttachment } from "./attachments.js";
 
 async function extractAttachments(message) {
   const blocks = [];
   if (message.attachments.size === 0) return blocks;
 
   for (const [, attachment] of message.attachments) {
-    const isImage = attachment.contentType?.startsWith("image/") ||
-      /\.(png|jpg|jpeg|gif|webp)$/i.test(attachment.name || "");
-    const isText = attachment.contentType?.startsWith("text/") ||
-      TEXT_EXTENSIONS.test(attachment.name || "");
+    const name = attachmentName(attachment);
+    const spoilerNote = isSpoiler(attachment) ? " (marked spoiler — you can still see it normally)" : "";
 
     try {
-      if (isImage) {
-        const resp = await fetch(attachment.url);
-        const buf = Buffer.from(await resp.arrayBuffer());
-        var mediaType = (attachment.contentType || "image/png").split(";")[0];
-        if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) {
-          mediaType = "image/png";
-        } else if (buf[0] === 0xFF && buf[1] === 0xD8) {
-          mediaType = "image/jpeg";
-        } else if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) {
-          mediaType = "image/gif";
-        } else if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) {
-          mediaType = "image/webp";
-        }
-        blocks.push({
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: mediaType,
-            data: buf.toString("base64"),
-          },
-        });
-        console.log("[discord] Attached image: " + attachment.name + " (" + mediaType + ", " + Math.round(buf.length / 1024) + "KB)");
-      } else if (isText) {
-        const resp = await fetch(attachment.url);
-        const text = await resp.text();
-        const savePath = UPLOADS_DIR + "/" + Date.now() + "-" + attachment.name;
-        writeFileSync(savePath, text, "utf8");
+      if (isImageAttachment(attachment)) {
+        const loaded = await imageBlockFromAttachment(attachment);
+        if (!loaded) continue;
+        blocks.push(loaded.block);
+        // The image is right above this line, but the path lets the model re-view
+        // the exact same file later with view_image instead of guessing.
         blocks.push({
           type: "text",
-          text: "[UPLOADED FILE: " + attachment.name + " (" + Math.round(text.length / 1024) + "KB) saved to " + savePath + " - use read_file tool to access contents]",
+          text: "[IMAGE: " + name + spoilerNote + " — the picture above. Saved to " + loaded.path + ", attachment id " + attachment.id + ". Re-view it any time with view_image on that exact path.]",
         });
-        console.log("[discord] Saved text file: " + attachment.name + " (" + Math.round(text.length / 1024) + "KB) -> " + savePath);
+        console.log("[discord] Attached image: " + name + " -> " + loaded.path);
       } else {
-        const resp = await fetch(attachment.url);
-        const buf = Buffer.from(await resp.arrayBuffer());
-        const savePath = UPLOADS_DIR + "/" + Date.now() + "-" + attachment.name;
-        writeFileSync(savePath, buf);
+        const savePath = await saveAttachment(attachment);
+        const size = Math.round(statSync(savePath).size / 1024);
+        const how = isTextAttachment(attachment) ? "use read_file tool to access contents" : "binary file, use bash to inspect";
         blocks.push({
           type: "text",
-          text: "[UPLOADED FILE: " + attachment.name + " (" + (attachment.contentType || "unknown type") + ", " + Math.round(buf.length / 1024) + "KB) saved to " + savePath + " - binary file, use bash to inspect]",
+          text: "[UPLOADED FILE: " + name + spoilerNote + " (" + (attachment.contentType || "unknown type") + ", " + size + "KB) saved to " + savePath + " - " + how + "]",
         });
-        console.log("[discord] Saved binary file: " + attachment.name + " (" + Math.round(buf.length / 1024) + "KB) -> " + savePath);
+        console.log("[discord] Saved file: " + name + " (" + size + "KB) -> " + savePath);
       }
     } catch (err) {
-      console.error("[discord] Failed to download attachment " + attachment.name + ":", err.message);
+      console.error("[discord] Failed to download attachment " + name + ":", err.message);
     }
   }
   return blocks;
