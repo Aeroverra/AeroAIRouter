@@ -11,12 +11,13 @@ export const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp)$/i;
 
 // Spoilered uploads arrive as SPOILER_<name>, so strip the marker before any
 // extension/type sniffing and keep the flag separately.
+// (discord.js exposes `name`; the raw REST payload calls it `filename`.)
 export function attachmentName(entry) {
-  return String(entry.name || "file").replace(/^SPOILER_/, "");
+  return String(entry.name || entry.filename || "file").replace(/^SPOILER_/, "");
 }
 
 export function isSpoiler(entry) {
-  return Boolean(entry.spoiler) || /^SPOILER_/.test(String(entry.name || ""));
+  return Boolean(entry.spoiler) || /^SPOILER_/.test(String(entry.name || entry.filename || ""));
 }
 
 export function isImageAttachment(entry) {
