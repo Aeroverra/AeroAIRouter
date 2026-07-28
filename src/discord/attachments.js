@@ -41,7 +41,7 @@ export function sniffMediaType(buf, fallback) {
 }
 
 // EVERY pasted screenshot is called "image.png", so the on-disk name is keyed by
-// the attachment's snowflake id — never by its filename. Keying by filename made
+// the attachment's snowflake id, never by its filename. Keying by filename made
 // every later image.png resolve to the FIRST one ever saved, which meant the model
 // was shown a stale, unrelated picture and had no way to know.
 function diskName(entry) {

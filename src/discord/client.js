@@ -39,7 +39,7 @@ async function extractAttachments(message) {
 
   for (const [, attachment] of message.attachments) {
     const name = attachmentName(attachment);
-    const spoilerNote = isSpoiler(attachment) ? " (marked spoiler — you can still see it normally)" : "";
+    const spoilerNote = isSpoiler(attachment) ? " (marked spoiler, you can still see it normally)" : "";
 
     try {
       if (isImageAttachment(attachment)) {
@@ -50,7 +50,7 @@ async function extractAttachments(message) {
         // the exact same file later with view_image instead of guessing.
         blocks.push({
           type: "text",
-          text: "[IMAGE: " + name + spoilerNote + " — the picture above. Saved to " + loaded.path + ", attachment id " + attachment.id + ". Re-view it any time with view_image on that exact path.]",
+          text: "[IMAGE: " + name + spoilerNote + ", the picture above. Saved to " + loaded.path + ", attachment id " + attachment.id + ". Re-view it any time with view_image on that exact path.]",
         });
         console.log("[discord] Attached image: " + name + " -> " + loaded.path);
       } else {
