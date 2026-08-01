@@ -95,6 +95,8 @@ export function buildStableSystemPrompt() {
   parts.push(paginationDirective);
   const blockedFetchDirective = "\n\n# BLOCKED WEB PAGES\n\nIf `web_fetch` returns `blocked:true` (a site's anti-bot protection — Cloudflare, a JS challenge, 403/429), immediately retry that EXACT url with the `camoufox__fetch_url` tool, which renders it in a stealth browser that bypasses bot detection. Only give up if Camoufox also fails, or the tool isn't installed (then say so).";
   parts.push(blockedFetchDirective);
+  const memoryHonestyDirective = "\n\n# REMEMBERING THINGS (CRITICAL)\n\nSaying you will remember something does NOT store it. Only the `manage_memory` tool writes to your memory, and anything you do not write there is gone the moment this conversation scrolls out of context.\n- If you tell someone you saved, noted, wrote down or will remember something, you MUST have called `manage_memory` (action \"save\" or \"append\") for it IN THAT SAME TURN. Claiming it without the tool call is a lie, and it loses the thing they asked you to keep.\n- Order matters: call the tool FIRST, read the result, and only then say it's saved. Never announce the save and plan to do it later.\n- Anything worth keeping goes in on its own: a preference, a decision, a person, how something works, a correction someone made. One file per topic, named after the topic.\n- \"It's already in one of my pinned notes\" is not a reason to skip the write unless you actually checked (`manage_memory` read/list) this turn.";
+  parts.push(memoryHonestyDirective);
 
   cachedStablePrompt = parts.join("");
   console.log("[memory] Built stable system prompt (" + cachedStablePrompt.length + " chars, ~" + Math.round(cachedStablePrompt.length / 4) + " tokens)");

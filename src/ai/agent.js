@@ -23,6 +23,16 @@ if (!existsSync(HISTORY_DIR)) mkdirSync(HISTORY_DIR, { recursive: true });
 // history back and copies its style.
 const SILENT_TURN_MARKER = "[system log: no message was sent for this turn. Log line, not your words. Never type anything like this into a channel.]";
 
+// A reply that claims something was written to long-term memory. Only manage_memory
+// actually writes, and she has told people "saved to memory" with no tool call at
+// all, so the fact was lost at the next context reset. Matched against her own
+// reply to catch the claim before it is posted.
+const MEMORY_CLAIM_RE = /\b(saved|added|wrote|writing|written|noted|storing|stored|logged|locked|filed|pinned|committed|updated|updating)\b[^.!?\n]{0,40}\b(to|in|into)\b[^.!?\n]{0,20}\b(memory|memories|memory file|memory files|my notes)\b|\b(memory|memories)\b[^.!?\n]{0,20}\b(saved|updated|written)\b|\bi'?(ll| will) remember (this|that|it)\b|\b(noted and|saved and) (locked|stored|remembered)\b/i;
+
+// The incoming message asking her to keep something. Deterministic signal that a
+// manage_memory write is expected this turn.
+const REMEMBER_REQUEST_RE = /\b(remember (this|that|it)|don'?t forget|make a note|save (this|that|it) (to|in) (your )?memor|add (this|that|it) to (your )?memor|write (this|that|it) down|keep (this|that|it) in mind|commit (this|that|it) to memory)\b/i;
+
 const channelHistory = new Map();
 const historyLoaded = new Set();
 const historyTimestamps = new Map();
@@ -215,7 +225,7 @@ export function isAddressedToMe(content, message) {
   return false;
 }
 
-export function buildChannelContext(channel, author, trust, addressed) {
+export function buildChannelContext(channel, author, trust, addressed, content) {
   return [
     "Channel: #" + channel.name + " (" + channel.id + ") in " + (channel.guild?.name || "DM"),
     "Speaking with: " + (author.displayName || author.username) + " (" + author.id + ")",
@@ -230,6 +240,9 @@ export function buildChannelContext(channel, author, trust, addressed) {
         "TIEBREAKER: if you are unsure, and you have anything genuinely funny, roastable or factual, SPEAK. Stay silent only when you are sure you would be adding nothing. Missing an obvious setup is a worse failure than being one message too talkative.\n" +
         "To stay silent, reply with exactly NO_REPLY and NOTHING else — that is a control token, it is swallowed before Discord and nobody ever sees it. Never pair it with other text and never post it as part of a real reply.\n" +
         "STAYING SILENT MEANS SAYING NOTHING AT ALL. Do not announce it, do not comment on the fact that a message wasn't for you, do not acknowledge, agree, react or add a one-liner instead. \"That one's for Cadence, not me\", \"not my call\", \"I'll let them take this one\", \"good point\" and a lone emoji are all REPLIES and all wrong. Never post a stage direction about it either: \"(stayed silent, nothing to add)\", \"(no reply)\" and anything in that shape are messages too, and posting one looks broken. If the honest answer is that nothing needs saying, the output is NO_REPLY and nothing else."
+      : "",
+    REMEMBER_REQUEST_RE.test(content || "")
+      ? "THIS MESSAGE ASKS YOU TO REMEMBER SOMETHING. Call manage_memory (action \"save\" or \"append\") for it in this turn, BEFORE you answer. Only that tool writes anything down; replying \"saved\" without it loses the thing they asked you to keep. If a note on the topic already exists, append to it rather than making a second one."
       : "",
     addressed
       ? "THIS MESSAGE IS AIMED AT YOU (it names you, @-mentions you, or replies to you). Answer it. Silence is not an option here and NO_REPLY is forbidden for this turn, even if the message is short, rhetorical, teasing, or you think it was covered already."
@@ -552,7 +565,7 @@ export async function handleMessage(content, authorId, channel, author, message,
   // "should I speak" block is swapped for an answer-it instruction. Mirrors the
   // wake conditions the router uses for "name" mode.
   const addressed = isAddressedToMe(content, message);
-  const channelCtx = buildChannelContext(channel, author, trust, addressed);
+  const channelCtx = buildChannelContext(channel, author, trust, addressed, content);
   const bgNote = getBackgroundTaskNote(channel.id);
   const dynamicContext = "\n\n# CURRENT CONTEXT\n\n" + channelCtx + bgNote;
   const systemBlocks = buildSystemBlocks(dynamicContext);
@@ -605,7 +618,7 @@ export async function handleMessage(content, authorId, channel, author, message,
 
   // Freeze message snapshot IMMEDIATELY before any async operations. The current
   // turn's images already live in history (above), so no re-injection is needed.
-  const frozenMessages = [...history];
+  let frozenMessages = [...history];
 
   const bgCount = (activeBackgroundTasks.get(channel.id)?.size || 0) + getActiveAgents().size;
   console.log("[ai] " + (author.displayName || author.username) + " in #" + channel.name + ": model=" + model + ", trust=" + trust + ", tools=" + tools.length + ", images=" + attachments.length + ", bgTasks=" + bgCount);
@@ -673,32 +686,52 @@ export async function handleMessage(content, authorId, channel, author, message,
 
   logCacheUsage(response, "first-call");
 
-  const textBlocks = response.content.filter((b) => b.type === "text");
-  const toolBlocks = response.content.filter((b) => b.type === "tool_use");
+  let textBlocks = response.content.filter((b) => b.type === "text");
+  let toolBlocks = response.content.filter((b) => b.type === "tool_use");
 
-  // Fast path: no tools needed, return response directly.
-  if (response.stop_reason === "end_turn" || toolBlocks.length === 0) {
-    let reply = textBlocks.map((b) => b.text).join("\n");
-    // Structural backstop for a message that was aimed at her: the prompt says
-    // silence is not allowed there, but prompt rules alone have not held before,
-    // and swallowing a sentinel would leave someone who asked her something
-    // staring at nothing. Ask once more, plainly, and use whatever comes back.
-    if (addressed && isSilenceReply(reply)) {
-      console.log("[ai] Addressed message got a silence sentinel, retrying once");
+  // Two failures the prompt alone has never reliably prevented, both of which
+  // look fine in the log and broken in the channel: staying silent on a message
+  // aimed straight at her, and announcing "saved to memory" without ever calling
+  // manage_memory (so the fact is lost at the next context reset). Both are only
+  // detectable once the reply exists, so catch them here and ask again. If the
+  // second answer wants tools, it falls through into the background path below.
+  if (toolBlocks.length === 0) {
+    const firstText = textBlocks.map((b) => b.text).join("\n");
+    let nudge = null;
+    if (addressed && isSilenceReply(firstText)) {
+      nudge = "[system] That message was addressed to you, so staying silent is not an option. Answer it now, in your own voice, with no meta commentary about this instruction.";
+    } else if (MEMORY_CLAIM_RE.test(firstText) && tools.some((t) => t.name === "manage_memory")) {
+      nudge = "[system] You just said you saved that, but you did not call manage_memory this turn, so nothing was written and it will be lost. Save it now with manage_memory (action \"save\" or \"append\", one file named for the topic), then reply. Do not mention this instruction.";
+    }
+    if (nudge) {
+      console.log("[ai] Retrying once: " + (addressed && isSilenceReply(firstText) ? "silence on an addressed message" : "unbacked memory claim"));
       const retryMessages = [
         ...frozenMessages,
-        { role: "assistant", content: reply || "NO_REPLY" },
-        { role: "user", content: "[system] That message was addressed to you, so staying silent is not an option. Answer it now, in your own voice, with no meta commentary about this instruction." },
+        { role: "assistant", content: firstText || "NO_REPLY" },
+        { role: "user", content: nudge },
       ];
       applyCacheControlToLastUserMessage(retryMessages);
       try {
         const retry = await streamApiCall(client, { ...params, messages: retryMessages });
+        const retryTools = retry.content.filter((b) => b.type === "tool_use");
         const retryText = retry.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-        if (retryText.trim() && !isSilenceReply(retryText)) reply = retryText;
+        // Keep the retry only if it actually improved on the first answer: real
+        // tool calls, or text that isn't the same silence again.
+        if (retryTools.length > 0 || (retryText.trim() && !isSilenceReply(retryText))) {
+          response = retry;
+          frozenMessages = retryMessages;
+          textBlocks = retry.content.filter((b) => b.type === "text");
+          toolBlocks = retryTools;
+        }
       } catch (err) {
-        console.error("[ai] Addressed-silence retry failed:", err.status, err.message?.substring(0, 200));
+        console.error("[ai] Retry failed:", err.status, err.message?.substring(0, 200));
       }
     }
+  }
+
+  // Fast path: no tools needed, return response directly.
+  if (response.stop_reason === "end_turn" || toolBlocks.length === 0) {
+    const reply = textBlocks.map((b) => b.text).join("\n");
     console.log("[ai] Direct reply (" + reply.length + " chars, stop=" + response.stop_reason + ")");
     // Record a stayed-silent turn as itself, not as the literal sentinel — the
     // history is fed back as her own past output, so storing "NO_REPLY" teaches
