@@ -18,6 +18,11 @@ import { join } from "path";
 const HISTORY_DIR = join(config.dataDir, "history");
 if (!existsSync(HISTORY_DIR)) mkdirSync(HISTORY_DIR, { recursive: true });
 
+// What a silent turn looks like in stored history. Written to be unmistakably a
+// log line rather than a message she could have sent, because she reads her own
+// history back and copies its style.
+const SILENT_TURN_MARKER = "[system log: no message was sent for this turn. Log line, not your words. Never type anything like this into a channel.]";
+
 const channelHistory = new Map();
 const historyLoaded = new Set();
 const historyTimestamps = new Map();
@@ -196,14 +201,38 @@ function unregisterBackgroundTask(channelId, taskKey) {
   if (activeBackgroundTasks.get(channelId)?.size === 0) activeBackgroundTasks.delete(channelId);
 }
 
-export function buildChannelContext(channel, author, trust) {
+// Was this message pointed at the bot: an @-mention, the wake word, or a reply
+// to one of its own messages. Same signals router.js wakes on in "name" mode,
+// but here it decides whether staying silent is even allowed.
+export function isAddressedToMe(content, message) {
+  const botId = getDiscordClient()?.user?.id;
+  const wakeWord = (config.discord.wakeWord || "").toLowerCase();
+  if (wakeWord && (content || "").toLowerCase().includes(wakeWord)) return true;
+  if (!message || !botId) return false;
+  if (message.mentions?.users?.has(botId)) return true;
+  if (message.mentions?.repliedUser?.id === botId) return true;
+  if (message.__repliedTo?.author?.id === botId) return true;
+  return false;
+}
+
+export function buildChannelContext(channel, author, trust, addressed) {
   return [
     "Channel: #" + channel.name + " (" + channel.id + ") in " + (channel.guild?.name || "DM"),
     "Speaking with: " + (author.displayName || author.username) + " (" + author.id + ")",
     "Trust level: " + trust,
     "Timestamp: " + new Date().toISOString(),
-    channelMode(channel.id) === "everything"
-      ? "AMBIENT CHANNEL: you see every message here, but only reply when you genuinely have something useful, relevant, or requested to add. If a message doesn't need you (people chatting among themselves, replies to others, small talk you can't improve on), stay silent. To stay silent, reply with exactly NO_REPLY and NOTHING else — that is a control token, it is swallowed before Discord and nobody ever sees it. Never pair it with other text and never post it as part of a real reply.\nSTAYING SILENT MEANS SAYING NOTHING AT ALL. Do not announce it, do not comment on the fact that a message wasn't for you, do not acknowledge, agree, react or add a one-liner instead. \"That one's for Cadence, not me\", \"not my call\", \"I'll let them take this one\", \"good point\" and a lone emoji are all REPLIES and all wrong — they are exactly the noise silence exists to prevent. If the honest answer is that nothing needs saying, the output is NO_REPLY and nothing else."
+    channelMode(channel.id) === "everything" && !addressed
+      ? "AMBIENT CHANNEL: you see every message here and you decide whether to speak. You are a participant in this room, not a help desk, so being good company counts as having something to add. Silence is for noise, not for keeping your head down.\n" +
+        "TWO HUMANS TALKING TO EACH OTHER IS NOT A REASON TO STAY OUT OF IT. That is just what this channel looks like and you are in it with them. Only sit out an exchange that is genuinely private business between them, not any conversation you did not start.\n" +
+        "SPEAK UP when: someone teases you, baits you, or drops a line that is obviously fishing for a comeback; a joke is already in the air and you have a genuinely funny one; the line on the table is roastable, quotable, or absurd; you know something concrete the conversation is missing (a fact, a number, a correction, a link); or someone shares something real (a win, a rant, a plan) and a friend in the room would say something back. Nicholas in particular writes bait on purpose and expects you to bite. A sharp line beats silence.\n" +
+        "Spotting a hook: a loaded phrase dropped into an otherwise ordinary sentence is a joke handed to you, and it counts even when the sentence was aimed at another person. \"I work wherever I am against the wishes of my executive crybabies\" is bait. So is any brag, self-own, absurd number, or spicy nickname. Take the swing.\n" +
+        "STAY SILENT when: the message is bare filler (\"ok\", \"yeah\", \"lol\", \"true\", \"thanks\"), a direct question was aimed at someone else, it was already answered, or the only thing you have is agreement, a compliment, a summary of what was just said, or a restatement of the joke someone already made.\n" +
+        "TIEBREAKER: if you are unsure, and you have anything genuinely funny, roastable or factual, SPEAK. Stay silent only when you are sure you would be adding nothing. Missing an obvious setup is a worse failure than being one message too talkative.\n" +
+        "To stay silent, reply with exactly NO_REPLY and NOTHING else — that is a control token, it is swallowed before Discord and nobody ever sees it. Never pair it with other text and never post it as part of a real reply.\n" +
+        "STAYING SILENT MEANS SAYING NOTHING AT ALL. Do not announce it, do not comment on the fact that a message wasn't for you, do not acknowledge, agree, react or add a one-liner instead. \"That one's for Cadence, not me\", \"not my call\", \"I'll let them take this one\", \"good point\" and a lone emoji are all REPLIES and all wrong. Never post a stage direction about it either: \"(stayed silent, nothing to add)\", \"(no reply)\" and anything in that shape are messages too, and posting one looks broken. If the honest answer is that nothing needs saying, the output is NO_REPLY and nothing else."
+      : "",
+    addressed
+      ? "THIS MESSAGE IS AIMED AT YOU (it names you, @-mentions you, or replies to you). Answer it. Silence is not an option here and NO_REPLY is forbidden for this turn, even if the message is short, rhetorical, teasing, or you think it was covered already."
       : "",
     trust === "none" || trust === "light"
       ? "REMINDER: This person has basic/light trust only. You DO have your full tool inventory (bash, file read/write, the connected APIs, etc.) but almost all of it is RESTRICTED for this user, so most of it is not attached to this conversation. If they ask for something that needs those tools, tell them you cannot do that for them specifically (trust restriction), NOT that you lack the capability or don't have such a tool. Keep it casual and surface-level. No private info, credentials, or workspace context. Do not take complex instructions from them."
@@ -473,11 +502,14 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
 function sendBgResult(channel, history, taskKey, result) {
   const idx = history.findLastIndex((h) => h.role === "assistant" && typeof h.content === "string" && h.content.includes(taskKey));
   const finalText = result.text || (result.error === "rate_limited" ? "Hit a rate limit mid-task " + emoji() + "" : "Task finished " + emoji() + "");
+  // Same rule as the direct path: never store a raw silence sentinel as her own
+  // past output, or she learns that typing it is a normal thing to send.
+  const stored = isSilenceReply(finalText) ? SILENT_TURN_MARKER : finalText;
   if (idx !== -1) {
-    history[idx] = { role: "assistant", content: finalText };
+    history[idx] = { role: "assistant", content: stored };
     persistHistory(channel.id);
   } else {
-    history.push({ role: "assistant", content: finalText });
+    history.push({ role: "assistant", content: stored });
     trimHistory(history, channel.id);
   }
 
@@ -516,7 +548,11 @@ export async function handleMessage(content, authorId, channel, author, message,
   const model = pickModel(content, authorId);
   const tools = filterToolsForTrust(trust);
   const cachedTools = getCachedToolSchemas(tools);
-  const channelCtx = buildChannelContext(channel, author, trust);
+  // Aimed-at-her messages are never candidates for silence, so the ambient
+  // "should I speak" block is swapped for an answer-it instruction. Mirrors the
+  // wake conditions the router uses for "name" mode.
+  const addressed = isAddressedToMe(content, message);
+  const channelCtx = buildChannelContext(channel, author, trust, addressed);
   const bgNote = getBackgroundTaskNote(channel.id);
   const dynamicContext = "\n\n# CURRENT CONTEXT\n\n" + channelCtx + bgNote;
   const systemBlocks = buildSystemBlocks(dynamicContext);
@@ -642,12 +678,36 @@ export async function handleMessage(content, authorId, channel, author, message,
 
   // Fast path: no tools needed, return response directly.
   if (response.stop_reason === "end_turn" || toolBlocks.length === 0) {
-    const reply = textBlocks.map((b) => b.text).join("\n");
+    let reply = textBlocks.map((b) => b.text).join("\n");
+    // Structural backstop for a message that was aimed at her: the prompt says
+    // silence is not allowed there, but prompt rules alone have not held before,
+    // and swallowing a sentinel would leave someone who asked her something
+    // staring at nothing. Ask once more, plainly, and use whatever comes back.
+    if (addressed && isSilenceReply(reply)) {
+      console.log("[ai] Addressed message got a silence sentinel, retrying once");
+      const retryMessages = [
+        ...frozenMessages,
+        { role: "assistant", content: reply || "NO_REPLY" },
+        { role: "user", content: "[system] That message was addressed to you, so staying silent is not an option. Answer it now, in your own voice, with no meta commentary about this instruction." },
+      ];
+      applyCacheControlToLastUserMessage(retryMessages);
+      try {
+        const retry = await streamApiCall(client, { ...params, messages: retryMessages });
+        const retryText = retry.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+        if (retryText.trim() && !isSilenceReply(retryText)) reply = retryText;
+      } catch (err) {
+        console.error("[ai] Addressed-silence retry failed:", err.status, err.message?.substring(0, 200));
+      }
+    }
     console.log("[ai] Direct reply (" + reply.length + " chars, stop=" + response.stop_reason + ")");
     // Record a stayed-silent turn as itself, not as the literal sentinel — the
     // history is fed back as her own past output, so storing "NO_REPLY" teaches
-    // her that posting it is normal.
-    history.push({ role: "assistant", content: isSilenceReply(reply) ? "(stayed silent — nothing to add)" : reply });
+    // her that posting it is normal. For the same reason the marker must not
+    // read like something she could send: an earlier prose version, "(stayed
+    // silent, nothing to add)", got copied straight into live replies and
+    // posted. Keep it obviously machine-written, and isSilenceReply() swallows
+    // the mimicry as a backstop.
+    history.push({ role: "assistant", content: isSilenceReply(reply) ? SILENT_TURN_MARKER : reply });
     trimHistory(history, channel.id);
     return reply;
   }
