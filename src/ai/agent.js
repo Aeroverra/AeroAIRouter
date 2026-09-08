@@ -415,6 +415,7 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
   let lastProgressEdit = 0;
   let toolCallCount = 0;
   let autoContinueCount = 0;
+  let noTextRetries = 0;
   const typingInterval = setInterval(() => {
     channel.sendTyping().catch(() => {});
   }, 8000);
@@ -456,6 +457,23 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
 
     if (response.stop_reason === "end_turn" || toolBlocks.length === 0) {
       const reply = textBlocks.map((b) => b.text).join("\n");
+      // A turn that ends with no visible text (thinking-only, or nothing at all)
+      // would otherwise reach the channel as the canned "Task finished". Log what
+      // came back and ask for the answer as text, a couple of times at most.
+      if (response.stop_reason === "refusal" && !reply.trim()) {
+        console.log("[ai] tool-loop ended with stop=refusal and no content");
+        return { text: "The model refused to continue this task (safety stop, no content came back). Partial work is on disk; try rephrasing " + emoji() + "", error: null, sentToChannel };
+      }
+      if (!reply.trim() && !sentToChannel) {
+        const shape = response.content.map((b) => b.type + "(" + (b.text || b.thinking || "").length + ")").join(",") || "empty";
+        console.log("[ai] end_turn with no text: stop=" + response.stop_reason + " blocks=" + shape + " retries=" + noTextRetries);
+        if (noTextRetries < 2) {
+          noTextRetries++;
+          if (response.content.length > 0) messages.push({ role: "assistant", content: response.content });
+          messages.push({ role: "user", content: "Your last turn contained no visible reply. Write your complete final answer for the user as normal text now, using the results you already have. Do not call tools unless something is missing." });
+          continue;
+        }
+      }
       // Background tasks must finish, not stall asking permission. If the model
       // ended its turn by asking to continue mid-task, inject a 'continue' nudge
       // and keep looping (up to a cap) instead of returning the partial result.
@@ -732,6 +750,12 @@ export async function handleMessage(content, authorId, channel, author, message,
   if (response.stop_reason === "end_turn" || toolBlocks.length === 0) {
     const reply = textBlocks.map((b) => b.text).join("\n");
     console.log("[ai] Direct reply (" + reply.length + " chars, stop=" + response.stop_reason + ")");
+    if (response.stop_reason === "refusal" && !reply.trim()) {
+      // A model-side safety stop: no content at all, not a choice to stay quiet.
+      // Say so instead of posting nothing (or the canned fallback).
+      history.pop();
+      return "The model refused that one outright (safety stop, no content came back). Try rephrasing " + emoji() + "";
+    }
     // Record a stayed-silent turn as itself, not as the literal sentinel — the
     // history is fed back as her own past output, so storing "NO_REPLY" teaches
     // her that posting it is normal. For the same reason the marker must not
