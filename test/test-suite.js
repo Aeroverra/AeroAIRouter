@@ -148,7 +148,10 @@ describe("agent internals", () => {
       assert.ok(owner.some(t => t.name === "write_file"));
       assert.ok(!elevated.some(t => t.name === "write_file"));
       assert.ok(!elevated.some(t => t.name === "cron"));
-      assert.deepEqual(none.map(t => t.name).sort(), ["read_discord_messages", "voice_speak", "web_fetch", "web_search"]);
+      // voice_speak only exists when the voice feature is enabled in config.
+      const safe = ["read_discord_messages", "web_fetch", "web_search"];
+      if (owner.some(t => t.name === "voice_speak")) safe.push("voice_speak");
+      assert.deepEqual(none.map(t => t.name).sort(), safe.sort());
     });
   });
 
@@ -289,14 +292,20 @@ describe("tool definitions", () => {
     executeTool = mod.executeTool;
   });
 
-  it("has all 23 expected tools with proper schemas", () => {
+  it("has all expected tools with proper schemas", () => {
     const expected = [
       "bash", "read_file", "view_image", "write_file", "list_files",
       "read_discord_messages", "search_discord_messages", "get_credentials", "task_manage",
-      "spawn_agent", "cancel_agent", "message_agent", "list_agents", "voice_speak", "trust_manage",
-      "voice_control", "web_search", "web_fetch", "discord_send", "task", "schedule",
+      "spawn_agent", "cancel_agent", "message_agent", "list_agents", "trust_manage",
+      "web_search", "web_fetch", "discord_send", "task", "schedule",
       "manage_memory", "use_skill",
     ];
+    // The two voice tools are registered only when config.features.voice is on,
+    // so they are optional here and must come as a pair.
+    const hasSpeak = toolSchemas.some(t => t.name === "voice_speak");
+    const hasControl = toolSchemas.some(t => t.name === "voice_control");
+    assert.equal(hasSpeak, hasControl, "voice_speak and voice_control must be registered together");
+    if (hasSpeak) expected.push("voice_speak", "voice_control");
     assert.equal(toolSchemas.length, expected.length);
     for (const name of expected) {
       const tool = toolSchemas.find(t => t.name === name);
