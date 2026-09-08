@@ -1,6 +1,7 @@
 import { emoji } from "../persona.js";
 import { getClient, getMetadata, BILLING_SYSTEM_BLOCK, forceRefresh } from "./client.js";
 import { pickModel, isComplex } from "./model-router.js";
+import { reasoningParams } from "./reasoning.js";
 import { channelMode } from "../discord/router.js";
 import { toolSchemas, executeTool, setPendingMessage, isExtraTool, getToolTrust, toolResultContent } from "../tools/definitions.js";
 import { buildStableSystemPrompt } from "../memory/loader.js";
@@ -408,6 +409,10 @@ function looksLikeMidTaskYield(text) {
     "keep going?", "continue?", "more api call", "more pages", "remaining pages",
     "i didn't get", "didn't get the full", "to hit 100", "the remaining", "i have the pagination",
     "would need", "i can keep", "want me to fetch",
+    "want me to finish", "want me to spawn", "want me to keep grinding", "want me to grind",
+    "in a follow-up", "follow-up?", "fresh session", "follow-up session", "finish the downloads",
+    "what's left to finish", "what's not done", "not done yet", "still needs checking",
+    "haven't been downloaded", "hasn't been", "not yet downloaded", "pure mechanical work",
   ];
   return patterns.some((x) => t.includes(x));
 }
@@ -433,6 +438,7 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
       system: systemBlocks,
       messages,
       metadata: getMetadata(),
+      ...reasoningParams(),
     };
 
     if (tools.length > 0) {
@@ -663,6 +669,7 @@ export async function handleMessage(content, authorId, channel, author, message,
     system: systemBlocks,
     messages: frozenMessages,
     metadata: getMetadata(),
+    ...reasoningParams(),
   };
 
   if (cachedTools.length > 0) {

@@ -7,6 +7,7 @@ import { writeFileSync, readFileSync, readdirSync, mkdirSync, existsSync, unlink
 import { join } from "path";
 import config from "../config/index.js";
 import { compactMessages } from "../ai/context.js";
+import { reasoningParams } from "../ai/reasoning.js";
 import { clearAllFileOwners } from "../tools/file-lock.js";
 import { emojiSuffix } from "../persona.js";
 import { getRedactionValues } from "../tools/credentials-store.js";
@@ -298,6 +299,7 @@ async function runAgent(agent, thread) {
       messages: agent.messages,
       tools: tools,
       metadata: getMetadata(),
+      ...reasoningParams(),
     };
 
     var response;

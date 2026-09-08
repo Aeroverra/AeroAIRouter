@@ -56,6 +56,8 @@ const defaults = {
     models: { casual: "claude-opus-4-8", complex: "claude-opus-4-8" },
     maxTokens: 128000,
     maxHistoryPerChannel: 100,
+    thinking: "adaptive", // adaptive | off  (see ai/reasoning.js)
+    effort: "high",       // low | medium | high | xhigh (4.7+) | max
     // LLM request customization, structured as per-provider profiles (future
     // multi-LLM). Empty objects => use the shipped defaults (see ai/llm-defaults.js).
     provider: "anthropic",
@@ -159,6 +161,8 @@ const config = {
     models: merged.ai.models,
     maxTokens: merged.ai.maxTokens,
     maxHistoryPerChannel: merged.ai.maxHistoryPerChannel,
+    thinking: merged.ai.thinking,
+    effort: merged.ai.effort,
     provider: merged.ai.provider,
     providers: merged.ai.providers,
   },

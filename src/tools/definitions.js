@@ -17,6 +17,8 @@ import { runTask } from "./tasks.js";
 import { selectMemories, readMemory, writeMemory, appendMemory, deleteMemory, safeMemoryName, memorySummary } from "../memory/store.js";
 import { discoverSkills, readSkill, isSkillEnabled } from "../skills/loader.js";
 import config from "../config/index.js";
+import { join as __join } from "path";
+import { randomUUID as __uuid } from "crypto";
 
 let pendingSubagentMessage = null;
 export function setPendingMessage(msg) {
@@ -179,7 +181,7 @@ export const toolSchemas = [
   },
   {
     name: "spawn_agent",
-    description: "Spawn a sub-agent in a Discord thread to work on a task independently.",
+    description: "Spawn a sub-agent in a Discord thread to work on a task independently. ONLY use this when the user explicitly asks for a sub-agent, background agent, or separate thread, or when they ask you to run several independent things at once. Otherwise do the work yourself in the current conversation with your own tools. If the user has told you to stop making threads or to do it yourself, NEVER call this. Spawning an agent does not count as finishing the task.",
     input_schema: {
       type: "object",
       properties: {
@@ -386,6 +388,51 @@ if (!(config.features && config.features.voice)) {
 // Convert a tool's return value into Anthropic tool_result `content`.
 // If the tool produced an image (view_image), return content blocks containing
 // a real image so the model can see it; otherwise stringify as before.
+// Large tool results (paginated API pages, big JSON dumps) are written to disk
+// and replaced with a preview + path, so a single 150KB response cannot eat
+// 40k tokens of context. The model extracts what it needs with bash/jq/python.
+const TOOL_OUTPUT_DIR = __join(config.installDir, "workspace", "tool-output");
+const MAX_INLINE_RESULT_CHARS = 24000; // ~7k tokens
+const RESULT_PREVIEW_CHARS = 6000;
+
+function summarizeTopLevel(str) {
+  try {
+    const obj = JSON.parse(str);
+    if (!obj || typeof obj !== "object") return "";
+    if (Array.isArray(obj)) return "Top level: array of " + obj.length + " items.";
+    const parts = [];
+    for (const k of Object.keys(obj)) {
+      const v = obj[k];
+      if (v === null || typeof v !== "object") {
+        let sv = String(v);
+        if (sv.length > 200) sv = sv.substring(0, 200) + "...";
+        parts.push(k + "=" + JSON.stringify(sv));
+      } else if (Array.isArray(v)) {
+        parts.push(k + "=[array of " + v.length + "]");
+      } else {
+        parts.push(k + "={object with keys: " + Object.keys(v).slice(0, 20).join(", ") + "}");
+      }
+    }
+    return "Top-level fields: " + parts.join("; ");
+  } catch { return ""; }
+}
+
+export function spillLargeToolResult(str) {
+  if (typeof str !== "string" || str.length <= MAX_INLINE_RESULT_CHARS) return str;
+  try {
+    mkdirSync(TOOL_OUTPUT_DIR, { recursive: true });
+    const file = __join(TOOL_OUTPUT_DIR, Date.now() + "-" + __uuid().substring(0, 8) + ".json");
+    writeFileSync(file, str, "utf8");
+    const summary = summarizeTopLevel(str);
+    return "[TOOL RESULT TOO LARGE TO INLINE: " + str.length + " chars. The COMPLETE output was saved to " + file +
+      " . Use bash (jq, python3 -c, grep) on that file to pull out exactly the fields you need, e.g. pagination cursors, ids, counts. Do not ask the user to continue; read the file and keep going.]\n" +
+      (summary ? summary + "\n" : "") +
+      "Preview (first " + RESULT_PREVIEW_CHARS + " chars):\n" + str.substring(0, RESULT_PREVIEW_CHARS) + "\n...[see file for the rest]";
+  } catch (e) {
+    return str.substring(0, MAX_INLINE_RESULT_CHARS) + "\n...[truncated: " + (str.length - MAX_INLINE_RESULT_CHARS) + " more chars, spill failed: " + e.message + "]";
+  }
+}
+
 export function toolResultContent(result) {
   if (result && typeof result === "object" && result.__imageBlock) {
     return [
@@ -393,7 +440,7 @@ export function toolResultContent(result) {
       result.__imageBlock,
     ];
   }
-  return typeof result === "string" ? result : JSON.stringify(result);
+  return spillLargeToolResult(typeof result === "string" ? result : JSON.stringify(result));
 }
 
 export function executeTool(name, input, discordClient, callerAgent) {
