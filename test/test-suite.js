@@ -215,34 +215,35 @@ describe("background task isolation", () => {
 // ============================================================
 
 describe("snapshot timing verification", () => {
-  it("snapshot is taken BEFORE any API calls (ack or first response)", () => {
+  it("history snapshot is taken BEFORE any API call", () => {
     const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
 
     // Find handleMessage function start so we only check within it
     const handleStart = source.indexOf("export async function handleMessage");
     assert.ok(handleStart > 0, "handleMessage function not found");
 
+    // The typing indicator moved out to discord/client.js, so the race that matters
+    // here is snapshot vs. the first API call: a concurrent message must not be able
+    // to mutate the history array between the snapshot and the request.
     const handleSource = source.substring(handleStart);
-    const snapshotPos = handleSource.indexOf("buildMessagesWithAttachments([...history]");
-    const ackPos = handleSource.indexOf("channel.sendTyping");
+    const snapshotPos = handleSource.indexOf("frozenMessages = [...history]");
     const firstApiPos = handleSource.indexOf("streamApiCall(client, params)");
 
     assert.ok(snapshotPos > 0, "snapshot call not found in handleMessage");
-    assert.ok(ackPos > 0, "sendTyping call not found in handleMessage");
     assert.ok(firstApiPos > 0, "first API call not found in handleMessage");
-
-    assert.ok(snapshotPos < ackPos, "RACE CONDITION: snapshot must be taken BEFORE the sendTyping call");
     assert.ok(snapshotPos < firstApiPos, "RACE CONDITION: snapshot must be taken BEFORE the first API call");
   });
 
-  it("bg task registration happens BEFORE sendTyping in complex path", () => {
+  it("bg task registration happens BEFORE the first API call in complex path", () => {
     const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
-    const registerLine = source.indexOf("registerBackgroundTask(channel.id, taskKey");
-    const sendTypingLine = source.indexOf("channel.sendTyping", registerLine);
+    const handleStart = source.indexOf("export async function handleMessage");
+    const handleSource = source.substring(handleStart);
+    const registerLine = handleSource.indexOf("registerBackgroundTask(channel.id, taskKey");
+    const firstApiPos = handleSource.indexOf("streamApiCall(client, params)");
 
     assert.ok(registerLine > 0, "registerBackgroundTask not found");
-    assert.ok(sendTypingLine > 0, "sendTyping not found after registerBackgroundTask");
-    assert.ok(registerLine < sendTypingLine, "bg task must be registered BEFORE sendTyping so concurrent messages see the warning");
+    assert.ok(firstApiPos > 0, "first API call not found");
+    assert.ok(registerLine < firstApiPos, "bg task must be registered BEFORE the first API call so concurrent messages see the warning");
   });
 
   it("non-complex tool-use path also registers bg task and pushes placeholder", () => {
@@ -288,12 +289,13 @@ describe("tool definitions", () => {
     executeTool = mod.executeTool;
   });
 
-  it("has all 18 expected tools with proper schemas", () => {
+  it("has all 23 expected tools with proper schemas", () => {
     const expected = [
-      "bash", "read_file", "write_file", "list_files",
-      "read_discord_messages", "get_credentials", "task_manage",
+      "bash", "read_file", "view_image", "write_file", "list_files",
+      "read_discord_messages", "search_discord_messages", "get_credentials", "task_manage",
       "spawn_agent", "cancel_agent", "message_agent", "list_agents", "voice_speak", "trust_manage",
-      "voice_control", "web_search", "web_fetch", "discord_send", "cron",
+      "voice_control", "web_search", "web_fetch", "discord_send", "task", "schedule",
+      "manage_memory", "use_skill",
     ];
     assert.equal(toolSchemas.length, expected.length);
     for (const name of expected) {
