@@ -8,6 +8,7 @@ import { join } from "path";
 import config from "../config/index.js";
 import { compactMessages } from "../ai/context.js";
 import { reasoningParams } from "../ai/reasoning.js";
+import { looksLikeMidTaskYield, MAX_AUTO_CONTINUE, CONTINUE_NUDGE } from "../ai/yield.js";
 import { clearAllFileOwners } from "../tools/file-lock.js";
 import { emojiSuffix } from "../persona.js";
 import { getRedactionValues } from "../tools/credentials-store.js";
@@ -352,6 +353,18 @@ async function runAgent(agent, thread) {
     if (response.stop_reason === "end_turn" || toolBlocks.length === 0) {
       if (agent.pendingMessages && agent.pendingMessages.length > 0) {
         agent.messages.push({ role: "assistant", content: response.content });
+        persistAgent(agent);
+        continue;
+      }
+      // Same rule as the main background loop: a sub-agent that ends its turn by
+      // asking to continue, or by listing what it has not done, is not finished.
+      var yieldText = textBlocks.map(function(b) { return b.text; }).join("\n");
+      agent.autoContinueCount = agent.autoContinueCount || 0;
+      if (agent.autoContinueCount < MAX_AUTO_CONTINUE && looksLikeMidTaskYield(yieldText)) {
+        agent.autoContinueCount++;
+        console.log("[subagent:" + agent.id + "] auto-continue " + agent.autoContinueCount + "/" + MAX_AUTO_CONTINUE + " (model tried to yield mid-task)");
+        agent.messages.push({ role: "assistant", content: response.content });
+        agent.messages.push({ role: "user", content: CONTINUE_NUDGE });
         persistAgent(agent);
         continue;
       }

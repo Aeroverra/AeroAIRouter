@@ -2,6 +2,7 @@ import { emoji } from "../persona.js";
 import { getClient, getMetadata, BILLING_SYSTEM_BLOCK, forceRefresh } from "./client.js";
 import { pickModel, isComplex } from "./model-router.js";
 import { reasoningParams } from "./reasoning.js";
+import { looksLikeMidTaskYield, MAX_AUTO_CONTINUE, CONTINUE_NUDGE } from "./yield.js";
 import { channelMode } from "../discord/router.js";
 import { toolSchemas, executeTool, setPendingMessage, isExtraTool, getToolTrust, toolResultContent } from "../tools/definitions.js";
 import { buildStableSystemPrompt } from "../memory/loader.js";
@@ -379,42 +380,33 @@ async function streamApiCall(client, params) {
     const fixes = sanitizeMessageSequence(params.messages);
     if (fixes > 0) console.log("[ai] sanitizeMessageSequence: removed " + fixes + " orphaned/invalid block(s) before send");
   }
-  try {
-    const stream = client.messages.stream(params);
-    return await stream.finalMessage();
-  } catch (err) {
-    if (err.status === 401) {
-      console.log("[ai] Got 401, forcing token refresh and retrying...");
-      await forceRefresh();
-      var freshClient = await getClient();
-      params = { ...params };
-      var stream2 = freshClient.messages.stream(params);
-      return await stream2.finalMessage();
+  // Overloaded (529), other 5xx and dropped connections are transient: the SDK
+  // only retries before the stream opens, so a mid-stream drop used to surface
+  // as "Something went wrong on my end" in the channel. Back off and retry.
+  const delays = [4000, 12000, 30000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const stream = client.messages.stream(params);
+      return await stream.finalMessage();
+    } catch (err) {
+      if (err.status === 401) {
+        console.log("[ai] Got 401, forcing token refresh and retrying...");
+        await forceRefresh();
+        var freshClient = await getClient();
+        params = { ...params };
+        var stream2 = freshClient.messages.stream(params);
+        return await stream2.finalMessage();
+      }
+      const transient = err.status === 529 || (err.status >= 500 && err.status < 600) || err.status === 408 ||
+        (!err.status && /overloaded|ECONNRESET|ETIMEDOUT|EPIPE|socket hang up|fetch failed|terminated|aborted/i.test(String(err.message)));
+      if (transient && attempt < delays.length) {
+        console.log("[ai] Transient API error (" + (err.status || String(err.message).substring(0, 80)) + "), retry " + (attempt + 1) + "/" + delays.length + " in " + delays[attempt] / 1000 + "s");
+        await new Promise((r) => setTimeout(r, delays[attempt]));
+        continue;
+      }
+      throw err;
     }
-    throw err;
   }
-}
-
-// Detect when the model has ended its turn by asking permission to keep going
-// mid-task (instead of just finishing). Used to auto-continue background tasks so
-// they actually complete instead of stalling on "want me to continue?".
-const MAX_AUTO_CONTINUE = 14;
-function looksLikeMidTaskYield(text) {
-  if (!text) return false;
-  const t = text.toLowerCase();
-  const patterns = [
-    "want me to continue", "want me to keep", "want me to paginate", "want me to go",
-    "should i continue", "shall i continue", "ask me to continue", "do you want me",
-    "let me know if you want", "i can continue", "ready to continue", "keep paginating",
-    "keep going?", "continue?", "more api call", "more pages", "remaining pages",
-    "i didn't get", "didn't get the full", "to hit 100", "the remaining", "i have the pagination",
-    "would need", "i can keep", "want me to fetch",
-    "want me to finish", "want me to spawn", "want me to keep grinding", "want me to grind",
-    "in a follow-up", "follow-up?", "fresh session", "follow-up session", "finish the downloads",
-    "what's left to finish", "what's not done", "not done yet", "still needs checking",
-    "haven't been downloaded", "hasn't been", "not yet downloaded", "pure mechanical work",
-  ];
-  return patterns.some((x) => t.includes(x));
 }
 
 async function runToolLoop(client, messages, tools, systemBlocks, model, channel, taskMeta, progressMsg) {
@@ -471,7 +463,7 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
         autoContinueCount++;
         console.log("[ai] auto-continue " + autoContinueCount + "/" + MAX_AUTO_CONTINUE + " (model tried to yield mid-task)");
         messages.push({ role: "assistant", content: response.content });
-        messages.push({ role: "user", content: "Continue and FINISH the task completely right now. You already have everything you need, including any pagination cursor. Do NOT stop to ask permission, do NOT summarize partial progress, do NOT check in \u2014 keep calling tools until the full requested deliverable is done (the exact count requested), then output the single final complete result. This is an automated continuation; asking to continue again is a failure." });
+        messages.push({ role: "user", content: CONTINUE_NUDGE });
         continue;
       }
       return { text: reply, error: null, sentToChannel };

@@ -425,7 +425,7 @@ export function spillLargeToolResult(str) {
     writeFileSync(file, str, "utf8");
     const summary = summarizeTopLevel(str);
     return "[TOOL RESULT TOO LARGE TO INLINE: " + str.length + " chars. The COMPLETE output was saved to " + file +
-      " . Use bash (jq, python3 -c, grep) on that file to pull out exactly the fields you need, e.g. pagination cursors, ids, counts. Do not ask the user to continue; read the file and keep going.]\n" +
+      " . Use bash (jq, python3 -c, grep) on that file to pull out exactly the fields you need, e.g. pagination cursors, ids, counts. The preview below is PARTIAL: never report a count, list, or 'not found' verdict from the preview alone, and never treat the end of the preview as the end of the data. Do not ask the user to continue; read the file and keep going.]\n" +
       (summary ? summary + "\n" : "") +
       "Preview (first " + RESULT_PREVIEW_CHARS + " chars):\n" + str.substring(0, RESULT_PREVIEW_CHARS) + "\n...[see file for the rest]";
   } catch (e) {

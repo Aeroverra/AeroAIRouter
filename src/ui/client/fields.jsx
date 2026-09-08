@@ -99,12 +99,12 @@ export function isScalar(f) {
 const LLM_DEFAULTS = {
   headers: {
     "anthropic-dangerous-direct-browser-access": "true",
-    "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,web-search-2025-03-05",
+    "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24,extended-cache-ttl-2025-04-11",
     "x-app": "cli",
-    "user-agent": "claude-cli/2.1.159 (external, sdk-cli)",
+    "user-agent": "claude-cli/2.1.263 (external, sdk-cli)",
   },
   query: { beta: "true" },
-  billingHeader: "cc_version=2.1.159.286; cc_entrypoint=sdk-cli; cch=e2159;",
+  billingHeader: "cc_version=2.1.263.fd5; cc_entrypoint=sdk-cli;",
 };
 const kvRows = (obj) => Object.entries(obj || {}).map(([k, v]) => ({ k, v: String(v) }));
 const rowsToObj = (rows) => { const o = {}; for (const r of rows) { const k = (r.k || "").trim(); if (k) o[k] = r.v; } return o; };
