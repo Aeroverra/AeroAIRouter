@@ -25,6 +25,31 @@ if (!existsSync(HISTORY_DIR)) mkdirSync(HISTORY_DIR, { recursive: true });
 // history back and copies its style.
 const SILENT_TURN_MARKER = "[system log: no message was sent for this turn. Log line, not your words. Never type anything like this into a channel.]";
 
+// Canned strings this bot posts when a turn produced no real model output (a
+// safety refusal, an error, a rate-limit) or to mark an in-flight background
+// task. They get posted to the channel and then re-ingested as "assistant"
+// turns when history reloads from Discord (or from disk); stacked into the
+// cached prefix they push the safety classifier toward refusing EVERY later
+// turn, wedging the channel so nothing gets a reply. They are bot chrome, never
+// model content, so they must never re-enter the model's context. Strip them
+// whenever history is loaded or persisted.
+const PLACEHOLDER_RES = [
+  /The model refused/i,
+  /safety stop, no content came back/i,
+  /Something went wrong on my end/i,
+  /^I am being rate limited/i,
+  /BACKGROUND TASK bg-/,
+  /Already working on this request in a separate background process/i,
+];
+function isPlaceholderTurn(msg) {
+  if (!msg || msg.role !== "assistant") return false;
+  if (typeof msg.content !== "string") return false;
+  return PLACEHOLDER_RES.some((re) => re.test(msg.content));
+}
+function stripPlaceholderTurns(list) {
+  return Array.isArray(list) ? list.filter((m) => !isPlaceholderTurn(m)) : list;
+}
+
 // A reply that claims something was written to long-term memory. Only manage_memory
 // actually writes, and she has told people "saved to memory" with no tool call at
 // all, so the fact was lost at the next context reset. Matched against her own
@@ -111,6 +136,8 @@ function persistHistory(channelId) {
   try {
     var history = channelHistory.get(channelId);
     if (!history || history.length === 0) return;
+    history = stripPlaceholderTurns(history);
+    if (history.length === 0) return;
     writeFileSync(
       join(HISTORY_DIR, channelId + ".json"),
       JSON.stringify(history),
@@ -125,7 +152,7 @@ function loadPersistedHistory(channelId) {
   try {
     var filePath = join(HISTORY_DIR, channelId + ".json");
     if (!existsSync(filePath)) return null;
-    return JSON.parse(readFileSync(filePath, "utf8"));
+    return stripPlaceholderTurns(JSON.parse(readFileSync(filePath, "utf8")));
   } catch (err) {
     console.error("[ai] Failed to load history for " + channelId + ":", err.message);
     return null;
@@ -164,6 +191,7 @@ async function ensureHistoryLoaded(channelId) {
   if (history.length > 0) return;
 
   for (const msg of recent) {
+    if (isPlaceholderTurn({ role: msg.role, content: msg.content })) continue;
     history.push({ role: msg.role, content: msg.content });
   }
   trimHistory(history, channelId);
