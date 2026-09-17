@@ -10,6 +10,12 @@ import { DATA_DIR } from "../config/paths.js";
 
 export const MEMORY_DIR = join(DATA_DIR, "memory");
 
+// Every memory file name (sorted). Used by refusal recovery to rank suspects.
+export function listMemoryNames() {
+  try { return readdirSync(MEMORY_DIR).filter((f) => f.toLowerCase().endsWith(".md")).sort(); }
+  catch { return []; }
+}
+
 // Selection rules for what gets injected into the system prompt. Kept here so the
 // UI can show the SAME loaded/skipped status the bot actually applies.
 export const MAX_MEMORY_BYTES = 80000; // ~20K tokens — fits the curated topic-memory set
@@ -125,11 +131,13 @@ export function setMemoryPinned(name, pinned) {
 // Compact index of EVERY memory (name + summary), newest first, so the model always
 // knows what exists — including memories too old to be loaded in full — and can pull
 // the relevant one on demand with manage_memory read. Cheap + stable (cached).
-export function buildMemoryIndex(limit = 100) {
+export function buildMemoryIndex(limit = 100, exclude) {
   ensureDir();
+  const skip = exclude instanceof Set ? exclude : new Set(exclude || []);
   let names;
   try { names = readdirSync(MEMORY_DIR).filter((f) => f.toLowerCase().endsWith(".md")).sort().reverse(); }
   catch { return ""; }
+  if (skip.size) names = names.filter((n) => !skip.has(n));
   if (!names.length) return "";
   const loaded = new Set(selectMemories().files.filter((f) => f.loaded).map((f) => f.name));
   const shown = names.slice(0, limit);
@@ -142,11 +150,13 @@ export function buildMemoryIndex(limit = 100) {
 }
 
 // The exact text block injected into the system prompt (loader.js uses this).
-export function buildMemoryText() {
+export function buildMemoryText(exclude) {
+  const skip = exclude instanceof Set ? exclude : new Set(exclude || []);
   const { files } = selectMemories();
   const parts = [];
   for (const f of files) {
     if (!f.loaded) continue;
+    if (skip.has(f.name)) continue;
     const content = readMemory(f.name);
     parts.push("--- " + f.name + " ---\n" + content);
   }

@@ -52,20 +52,17 @@ function buildToolInventory() {
   );
 }
 
-export function buildStableSystemPrompt() {
-  if (cachedStablePrompt) return cachedStablePrompt;
-
+function assembleStablePrompt(opts = {}) {
+  const exclude = opts.excludeMemories instanceof Set ? opts.excludeMemories : new Set(opts.excludeMemories || []);
   const soul = loadPersona("soul.md");
   const memory = loadPersona("memory.md");
   const heartbeat = loadPersona("heartbeat.md");
-  const recentMemories = loadMemoryFiles();
-  const memoryIndex = buildMemoryIndex();
+  const recentMemories = opts.dropPinned ? "" : (exclude.size ? buildMemoryText(exclude) : loadMemoryFiles());
+  const memoryIndex = opts.dropIndex ? "" : buildMemoryIndex(100, exclude);
 
-  const parts = [
-    soul,
-    "\n\n# LONG-TERM MEMORY\n\n" + memory,
-    "\n\n# DISCORD ROUTING RULES\n\n" + heartbeat,
-  ];
+  const parts = [soul];
+  if (!opts.dropLongTerm) parts.push("\n\n# LONG-TERM MEMORY\n\n" + memory);
+  parts.push("\n\n# DISCORD ROUTING RULES\n\n" + heartbeat);
 
   if (memoryIndex) {
     parts.push("\n\n# MEMORY INDEX\n\nEvery memory you have — the name plus a one-line summary of what each holds. Only the ones marked [pinned] are included in full below; for ANYTHING else, READ IT ON DEMAND with the manage_memory tool (action \"read\", exact name) the moment its topic comes up — the summary tells you which to open. Always check this index before saying you don't know or don't remember something.\n\n" + memoryIndex);
@@ -98,9 +95,22 @@ export function buildStableSystemPrompt() {
   const memoryHonestyDirective = "\n\n# REMEMBERING THINGS (CRITICAL)\n\nSaying you will remember something does NOT store it. Only the `manage_memory` tool writes to your memory, and anything you do not write there is gone the moment this conversation scrolls out of context.\n- If you tell someone you saved, noted, wrote down or will remember something, you MUST have called `manage_memory` (action \"save\" or \"append\") for it IN THAT SAME TURN. Claiming it without the tool call is a lie, and it loses the thing they asked you to keep.\n- Order matters: call the tool FIRST, read the result, and only then say it's saved. Never announce the save and plan to do it later.\n- Anything worth keeping goes in on its own: a preference, a decision, a person, how something works, a correction someone made. One file per topic, named after the topic.\n- \"It's already in one of my pinned notes\" is not a reason to skip the write unless you actually checked (`manage_memory` read/list) this turn.";
   parts.push(memoryHonestyDirective);
 
-  cachedStablePrompt = parts.join("");
+  return parts.join("");
+}
+
+export function buildStableSystemPrompt() {
+  if (cachedStablePrompt) return cachedStablePrompt;
+  cachedStablePrompt = assembleStablePrompt();
   console.log("[memory] Built stable system prompt (" + cachedStablePrompt.length + " chars, ~" + Math.round(cachedStablePrompt.length / 4) + " tokens)");
   return cachedStablePrompt;
+}
+
+// Uncached variant for refusal recovery: same prompt with specific memories
+// excluded (from BOTH the index and the pinned-in-full block) or whole memory
+// sections dropped. opts: { excludeMemories:Set<string>, dropIndex, dropPinned,
+// dropLongTerm }.
+export function buildStablePromptVariant(opts) {
+  return assembleStablePrompt(opts || {});
 }
 
 export function buildSystemPrompt(channelContext) {

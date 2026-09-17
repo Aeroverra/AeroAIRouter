@@ -5,7 +5,8 @@ import { reasoningParams } from "./reasoning.js";
 import { looksLikeMidTaskYield, MAX_AUTO_CONTINUE, CONTINUE_NUDGE } from "./yield.js";
 import { channelMode } from "../discord/router.js";
 import { toolSchemas, executeTool, setPendingMessage, isExtraTool, getToolTrust, toolResultContent } from "../tools/definitions.js";
-import { buildStableSystemPrompt } from "../memory/loader.js";
+import { buildStableSystemPrompt, buildStablePromptVariant } from "../memory/loader.js";
+import { rankSuspectMemories, allSensitiveMemoryNames, summarizeMemoryForPrompt, redactMemory } from "./refusal-recovery.js";
 import { fetchRecentMessages } from "../discord/history.js";
 import { hasResponded, markResponded } from "../tools/responded-cache.js";
 import { getDiscordClient } from "../discord/client.js";
@@ -437,6 +438,117 @@ async function streamApiCall(client, params) {
   }
 }
 
+function extractLastUserText(messages) {
+  if (!Array.isArray(messages)) return "";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!m || m.role !== "user") continue;
+    if (typeof m.content === "string") return m.content;
+    if (Array.isArray(m.content)) {
+      const t = m.content.filter((b) => b && b.type === "text").map((b) => b.text).join("\n");
+      if (t) return t;
+    }
+  }
+  return "";
+}
+
+// Rebuild the system blocks with a lighter memory footprint, keeping the billing
+// header and the dynamic-context block, and optionally appending a safe summary
+// of the memory we removed so she still has context to answer.
+function buildSystemBlocksVariant(baseSystem, opts) {
+  const billing = Array.isArray(baseSystem) && baseSystem.length ? baseSystem[0] : BILLING_SYSTEM_BLOCK;
+  const dynBlock = Array.isArray(baseSystem) && baseSystem.length ? baseSystem[baseSystem.length - 1] : null;
+  let dyn = dynBlock && typeof dynBlock.text === "string" ? dynBlock.text : "";
+  if (opts.extraContext) {
+    dyn += "\n\n# RELEVANT MEMORY (summarized; sensitive detail intentionally omitted)\n\n" + opts.extraContext;
+  }
+  return [
+    billing,
+    { type: "text", text: buildStablePromptVariant(opts) },
+    { type: "text", text: dyn },
+  ];
+}
+
+// Recover from a hard API refusal (stop_reason "refusal", no content). The
+// refusal is usually caused by a sensitive memory sitting in the always-on
+// prompt, not by the question. Determine the likely culprit, summarize it down
+// to only the safe facts needed to answer, then retry with progressively more
+// memory stripped; if all retries still refuse, drop to Opus 4.8. Returns the
+// recovered text, or null if nothing worked.
+async function attemptRefusalRecovery(client, baseParams) {
+  const userText = extractLastUserText(baseParams.messages);
+  if (!userText) return null;
+  const baseSystem = baseParams.system;
+
+  let suspects = [];
+  try { suspects = rankSuspectMemories(userText); } catch {}
+  let sensitive = [];
+  try { sensitive = allSensitiveMemoryNames(); } catch {}
+  if (suspects.length === 0 && sensitive.length === 0) return null;
+  console.log("[ai] refusal recovery: top suspects = " + (suspects.slice(0, 3).join(", ") || "(none)"));
+
+  // One prompt-focused safe summary of the top suspects, reused across attempts.
+  const toSummarize = (suspects.length ? suspects : sensitive).slice(0, 3);
+  let safeSummary = "";
+  try { safeSummary = await summarizeMemoryForPrompt(client, toSummarize, userText); }
+  catch (e) { console.log("[ai] recovery summarizer failed (" + (e.status || e.message) + "), using redaction"); }
+  if (!safeSummary) { try { safeSummary = toSummarize.map(redactMemory).filter(Boolean).join(" "); } catch {} }
+
+  // Rungs 1-3 keep the (scrubbed) summary so she still has context to answer;
+  // 4 drops the whole memory index but keeps the summary; 5 is fully clean (no
+  // summary at all) in case the summary itself is what still trips it. The Opus
+  // 4.8 fallback reuses that fully-clean prompt.
+  const ladder = [
+    { excludeMemories: new Set(suspects.slice(0, 1)), extraContext: safeSummary },
+    { excludeMemories: new Set(suspects.slice(0, 3)), extraContext: safeSummary },
+    { excludeMemories: new Set(sensitive), extraContext: safeSummary },
+    { dropIndex: true, dropPinned: true, extraContext: safeSummary },
+    { dropIndex: true, dropPinned: true, dropLongTerm: true },
+  ];
+
+  for (let i = 0; i < ladder.length; i++) {
+    const opts = ladder[i];
+    if (opts.excludeMemories && opts.excludeMemories.size === 0 && !opts.dropIndex) continue;
+    const params = { ...baseParams, system: buildSystemBlocksVariant(baseSystem, opts) };
+    let resp;
+    try { resp = await recoveryCall(client, params); }
+    catch (e) { console.log("[ai] recovery attempt " + (i + 1) + " errored (" + (e.status || e.message) + ")"); continue; }
+    const text = resp.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+    if (resp.stop_reason !== "refusal" && text.trim()) {
+      console.log("[ai] refusal recovered on attempt " + (i + 1) + "/5");
+      return text;
+    }
+  }
+
+  try {
+    const opts = ladder[ladder.length - 1];
+    const params = { ...baseParams, system: buildSystemBlocksVariant(baseSystem, opts), model: "claude-opus-4-8" };
+    const resp = await recoveryCall(client, params);
+    const text = resp.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+    if (resp.stop_reason !== "refusal" && text.trim()) {
+      console.log("[ai] refusal recovered via Opus 4.8 fallback");
+      return text;
+    }
+  } catch (e) { console.log("[ai] Opus 4.8 fallback errored (" + (e.status || e.message) + ")"); }
+
+  return null;
+}
+
+// streamApiCall does not retry 429s (the normal path returns a "rate limited"
+// note instead). Recovery is a rare, already-degraded path, so here we do tough
+// through a couple of rate-limit hits, otherwise throttling silently nullifies
+// every rung and the recovery never gets a real attempt.
+async function recoveryCall(client, params) {
+  const waits = [8000, 20000];
+  for (let a = 0; ; a++) {
+    try { return await streamApiCall(client, params); }
+    catch (e) {
+      if (e.status === 429 && a < waits.length) { await new Promise((r) => setTimeout(r, waits[a])); continue; }
+      throw e;
+    }
+  }
+}
+
 async function runToolLoop(client, messages, tools, systemBlocks, model, channel, taskMeta, progressMsg) {
   let sentToChannel = false;
   let progressLines = [];
@@ -490,6 +602,10 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
       // came back and ask for the answer as text, a couple of times at most.
       if (response.stop_reason === "refusal" && !reply.trim()) {
         console.log("[ai] tool-loop ended with stop=refusal and no content");
+        const recovered = await attemptRefusalRecovery(client, params);
+        if (recovered && recovered.trim()) {
+          return { text: recovered, error: null, sentToChannel };
+        }
         return { text: "The model refused to continue this task (safety stop, no content came back). Partial work is on disk; try rephrasing " + emoji() + "", error: null, sentToChannel };
       }
       if (!reply.trim() && !sentToChannel) {
@@ -782,6 +898,12 @@ export async function handleMessage(content, authorId, channel, author, message,
       // A model-side safety stop: no content at all, not a choice to stay quiet.
       // Say so instead of posting nothing (or the canned fallback).
       history.pop();
+      const recovered = await attemptRefusalRecovery(client, params);
+      if (recovered && recovered.trim()) {
+        history.push({ role: "assistant", content: recovered });
+        trimHistory(history, channel.id);
+        return recovered;
+      }
       return "The model refused that one outright (safety stop, no content came back). Try rephrasing " + emoji() + "";
     }
     // Record a stayed-silent turn as itself, not as the literal sentinel — the
