@@ -20,11 +20,15 @@ import { listMemoryNames, memorySummary, readMemory } from "../memory/store.js";
 // stuff that makes the classifier jumpy when a related question shows up.
 const SENSITIVE_RE = /\b(rce|exploit\w*|cvss|cve|mitm|payload|malware|ransom\w*|credential\w*|creds|password\w*|passwd|api[_-]?key|secret|token|vuln\w*|zero[-\s]?day|0day|bypass|backdoor|injection|hitlist|hit[-\s]list|breach\w*|privilege|escalat\w*|disclosure|attack\w*|weaponiz\w*)\b/i;
 
+// Split digit/letter runs apart before tokenizing so a glued "9.6cve" yields
+// "cve" (users type it both ways), then keep 3+ char tokens so short-but-loaded
+// acronyms ("cve", "rce", "mitm") count — those are exactly the words that link
+// a security question to the memory that trips the refusal.
+function normalizeText(s) {
+  return String(s || "").toLowerCase().replace(/(\d)([a-z])/g, "$1 $2").replace(/([a-z])(\d)/g, "$1 $2");
+}
 function tokens(s) {
-  // 3+ chars so short-but-loaded acronyms ("cve", "rce", "mitm") count — those
-  // are exactly the words that link a security question to the memory that trips
-  // the refusal, so dropping them (as a 4-char minimum did) blinded the ranker.
-  return String(s || "").toLowerCase().match(/[a-z0-9]{3,}/g) || [];
+  return normalizeText(s).match(/[a-z0-9]{3,}/g) || [];
 }
 
 // Cheap sensitivity probe: name + one-line summary + the first ~1.5KB of body.
@@ -49,7 +53,7 @@ export function rankSuspectMemories(userText) {
   // A security-flavored question ("did they accept my CVE", "the RCE I found")
   // is exactly the kind that a sensitive memory refuses next to, so when the
   // prompt itself reads sensitive, weight sensitive memories much more heavily.
-  const promptSensitive = SENSITIVE_RE.test(userText);
+  const promptSensitive = SENSITIVE_RE.test(normalizeText(userText));
   const scored = listMemoryNames().map((name) => {
     const summary = memorySummary(name);
     let body = "";

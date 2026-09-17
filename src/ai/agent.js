@@ -549,6 +549,39 @@ async function recoveryCall(client, params) {
   }
 }
 
+// One rung of in-loop refusal recovery for the tool path. Unlike the one-shot
+// direct-path recovery, this hands the loop a lighter (system, model) to adopt
+// and CONTINUE with, so her tools keep running and she actually finishes the
+// task rather than stopping on a "let me look into it" preamble. Levels 0-3 lift
+// memory off Opus 5 progressively; level 4 drops to Opus 4.8 on a fully clean
+// prompt. The suspect ranking + safe summary are computed once and cached.
+async function buildRecoveryStep(level, baseSystem, messages, cache, client) {
+  if (!cache.inited) {
+    cache.inited = true;
+    const userText = extractLastUserText(messages);
+    try { cache.suspects = userText ? rankSuspectMemories(userText) : []; } catch { cache.suspects = []; }
+    try { cache.sensitive = allSensitiveMemoryNames(); } catch { cache.sensitive = []; }
+    const top = (cache.suspects.length ? cache.suspects : cache.sensitive).slice(0, 3);
+    let summary = "";
+    if (userText && top.length) {
+      try { summary = await summarizeMemoryForPrompt(client, top, userText); }
+      catch (e) { console.log("[ai] recovery summarizer failed (" + (e.status || e.message) + ")"); }
+      if (!summary) { try { summary = top.map(redactMemory).filter(Boolean).join(" "); } catch {} }
+    }
+    cache.summary = summary;
+    console.log("[ai] refusal recovery: top suspects = " + (cache.suspects.slice(0, 3).join(", ") || "(none)"));
+  }
+  const opts = [
+    { excludeMemories: new Set(cache.suspects.slice(0, 3)), extraContext: cache.summary },
+    { excludeMemories: new Set(cache.sensitive), extraContext: cache.summary },
+    { dropIndex: true, dropPinned: true, extraContext: cache.summary },
+    { dropIndex: true, dropPinned: true, dropLongTerm: true },
+  ];
+  if (level < opts.length) return { system: buildSystemBlocksVariant(baseSystem, opts[level]) };
+  if (level === opts.length) return { system: buildSystemBlocksVariant(baseSystem, opts[opts.length - 1]), model: "claude-opus-4-8" };
+  return null;
+}
+
 async function runToolLoop(client, messages, tools, systemBlocks, model, channel, taskMeta, progressMsg) {
   let sentToChannel = false;
   let progressLines = [];
@@ -556,6 +589,12 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
   let toolCallCount = 0;
   let autoContinueCount = 0;
   let noTextRetries = 0;
+  // Refusal recovery adopts a lighter system prompt / model and continues the
+  // loop; baseSystemBlocks is the full prompt each rung rebuilds from.
+  const baseSystemBlocks = systemBlocks;
+  let recoveryModel = model;
+  let recoveryLevel = 0;
+  const recoveryCache = {};
   const typingInterval = setInterval(() => {
     channel.sendTyping().catch(() => {});
   }, 8000);
@@ -566,7 +605,7 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
     applyCacheControlToLastUserMessage(messages);
 
     const params = {
-      model,
+      model: recoveryModel,
       max_tokens: config.ai.maxTokens,
       system: systemBlocks,
       messages,
@@ -601,11 +640,15 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
       // would otherwise reach the channel as the canned "Task finished". Log what
       // came back and ask for the answer as text, a couple of times at most.
       if (response.stop_reason === "refusal" && !reply.trim()) {
-        console.log("[ai] tool-loop ended with stop=refusal and no content");
-        const recovered = await attemptRefusalRecovery(client, params);
-        if (recovered && recovered.trim()) {
-          return { text: recovered, error: null, sentToChannel };
+        const step = await buildRecoveryStep(recoveryLevel, baseSystemBlocks, messages, recoveryCache, client);
+        if (step) {
+          console.log("[ai] tool-loop refusal — recovery level " + recoveryLevel + (step.model ? " → " + step.model : "") + ", retrying with lighter memory");
+          systemBlocks = step.system;
+          if (step.model) recoveryModel = step.model;
+          recoveryLevel++;
+          continue;
         }
+        console.log("[ai] tool-loop refusal — recovery exhausted");
         return { text: "The model refused to continue this task (safety stop, no content came back). Partial work is on disk; try rephrasing " + emoji() + "", error: null, sentToChannel };
       }
       if (!reply.trim() && !sentToChannel) {
