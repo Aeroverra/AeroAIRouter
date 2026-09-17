@@ -475,16 +475,37 @@ function buildSystemBlocksVariant(baseSystem, opts) {
 // to only the safe facts needed to answer, then retry with progressively more
 // memory stripped; if all retries still refuse, drop to Opus 4.8. Returns the
 // recovered text, or null if nothing worked.
+// A memory file name as it should read to a person: drop the .md.
+function prettyMemoryName(name) {
+  return name ? String(name).replace(/\.md$/i, "") : "";
+}
+
+// The user-facing message when recovery could NOT rescue a refusal, saying what
+// actually happened instead of a flat "refused, try rephrasing": whether it was
+// a rate limit (retryable) or a genuine safety stop, and which memory looks like
+// the cause so the user knows the lever.
+function recoveryFailedMessage(reason, suspect) {
+  const note = suspect ? " even after I set aside my `" + suspect + "` note" : "";
+  if (reason === "rate_limited") {
+    return "Safety-stopped on this one, and I kept hitting the API rate limit while trying to work around it" + note + ". Give it a minute and ask again " + emoji() + "";
+  }
+  return "Safety-stopped on this one" + note + ", so the block is tied to that topic (a sensitive memory in my context), not something rephrasing fixes. Ask a different way, or have me set that memory aside " + emoji() + "";
+}
+
+// Direct (non-tool) path recovery. Returns { text } on success, else
+// { failure: "rate_limited"|"refused", suspect } so the caller can say what
+// happened. The tool path recovers in-loop via buildRecoveryStep instead.
 async function attemptRefusalRecovery(client, baseParams) {
   const userText = extractLastUserText(baseParams.messages);
-  if (!userText) return null;
+  if (!userText) return { failure: "refused", suspect: null };
   const baseSystem = baseParams.system;
 
   let suspects = [];
   try { suspects = rankSuspectMemories(userText); } catch {}
   let sensitive = [];
   try { sensitive = allSensitiveMemoryNames(); } catch {}
-  if (suspects.length === 0 && sensitive.length === 0) return null;
+  if (suspects.length === 0 && sensitive.length === 0) return { failure: "refused", suspect: null };
+  const topSuspect = prettyMemoryName(suspects[0] || sensitive[0]);
   console.log("[ai] refusal recovery: top suspects = " + (suspects.slice(0, 3).join(", ") || "(none)"));
 
   // One prompt-focused safe summary of the top suspects, reused across attempts.
@@ -506,17 +527,18 @@ async function attemptRefusalRecovery(client, baseParams) {
     { dropIndex: true, dropPinned: true, dropLongTerm: true },
   ];
 
+  let sawRateLimit = false;
   for (let i = 0; i < ladder.length; i++) {
     const opts = ladder[i];
     if (opts.excludeMemories && opts.excludeMemories.size === 0 && !opts.dropIndex) continue;
     const params = { ...baseParams, system: buildSystemBlocksVariant(baseSystem, opts) };
     let resp;
     try { resp = await recoveryCall(client, params); }
-    catch (e) { console.log("[ai] recovery attempt " + (i + 1) + " errored (" + (e.status || e.message) + ")"); continue; }
+    catch (e) { if (e.status === 429) sawRateLimit = true; console.log("[ai] recovery attempt " + (i + 1) + " errored (" + (e.status || e.message) + ")"); continue; }
     const text = resp.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
     if (resp.stop_reason !== "refusal" && text.trim()) {
       console.log("[ai] refusal recovered on attempt " + (i + 1) + "/5");
-      return text;
+      return { text };
     }
   }
 
@@ -527,11 +549,11 @@ async function attemptRefusalRecovery(client, baseParams) {
     const text = resp.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
     if (resp.stop_reason !== "refusal" && text.trim()) {
       console.log("[ai] refusal recovered via Opus 4.8 fallback");
-      return text;
+      return { text };
     }
-  } catch (e) { console.log("[ai] Opus 4.8 fallback errored (" + (e.status || e.message) + ")"); }
+  } catch (e) { if (e.status === 429) sawRateLimit = true; console.log("[ai] Opus 4.8 fallback errored (" + (e.status || e.message) + ")"); }
 
-  return null;
+  return { failure: sawRateLimit ? "rate_limited" : "refused", suspect: topSuspect };
 }
 
 // streamApiCall does not retry 429s (the normal path returns a "rate limited"
@@ -649,7 +671,9 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
           continue;
         }
         console.log("[ai] tool-loop refusal — recovery exhausted");
-        return { text: "The model refused to continue this task (safety stop, no content came back). Partial work is on disk; try rephrasing " + emoji() + "", error: null, sentToChannel };
+        const culprit = prettyMemoryName((recoveryCache.suspects && recoveryCache.suspects[0]) || "");
+        const note = culprit ? " even after I set aside my `" + culprit + "` note" : "";
+        return { text: "Safety-stopped partway through this" + note + ", so the block is tied to that topic (a sensitive memory in my context), not the task itself. Partial work is on disk. Ask a different way, or have me set that memory aside " + emoji() + "", error: null, sentToChannel };
       }
       if (!reply.trim() && !sentToChannel) {
         const shape = response.content.map((b) => b.type + "(" + (b.text || b.thinking || "").length + ")").join(",") || "empty";
@@ -942,12 +966,12 @@ export async function handleMessage(content, authorId, channel, author, message,
       // Say so instead of posting nothing (or the canned fallback).
       history.pop();
       const recovered = await attemptRefusalRecovery(client, params);
-      if (recovered && recovered.trim()) {
-        history.push({ role: "assistant", content: recovered });
+      if (recovered && recovered.text && recovered.text.trim()) {
+        history.push({ role: "assistant", content: recovered.text });
         trimHistory(history, channel.id);
-        return recovered;
+        return recovered.text;
       }
-      return "The model refused that one outright (safety stop, no content came back). Try rephrasing " + emoji() + "";
+      return recoveryFailedMessage(recovered && recovered.failure, recovered && recovered.suspect);
     }
     // Record a stayed-silent turn as itself, not as the literal sentinel — the
     // history is fed back as her own past output, so storing "NO_REPLY" teaches
