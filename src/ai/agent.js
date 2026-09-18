@@ -452,6 +452,21 @@ function extractLastUserText(messages) {
   return "";
 }
 
+// A refusal is just as often caused by a POISONED CONVERSATION (a channel whose
+// backlog is full of sensitive/exploit/refusal turns) as by a sensitive memory —
+// stripping memory can't fix that. This keeps only the last `keepTurns` turns
+// (ending on the current question) so recovery can retry with the poisoned
+// backlog removed. Starts the slice on a clean user message and repairs any
+// split tool_use/tool_result pair.
+function trimMessagesToLast(messages, keepTurns) {
+  if (!Array.isArray(messages) || messages.length <= keepTurns) return messages;
+  let slice = messages.slice(-keepTurns);
+  while (slice.length && slice[0].role !== "user") slice = slice.slice(1);
+  if (!slice.length) slice = messages.slice(-1);
+  sanitizeMessageSequence(slice);
+  return slice;
+}
+
 // Rebuild the system blocks with a lighter memory footprint, keeping the billing
 // header and the dynamic-context block, and optionally appending a safe summary
 // of the memory we removed so she still has context to answer.
@@ -495,7 +510,7 @@ function recoveryFailedMessage(reason, suspect) {
 // Direct (non-tool) path recovery. Returns { text } on success, else
 // { failure: "rate_limited"|"refused", suspect } so the caller can say what
 // happened. The tool path recovers in-loop via buildRecoveryStep instead.
-async function attemptRefusalRecovery(client, baseParams) {
+async function attemptRefusalRecovery(client, baseParams, channel) {
   const userText = extractLastUserText(baseParams.messages);
   if (!userText) return { failure: "refused", suspect: null };
   const baseSystem = baseParams.system;
@@ -515,43 +530,48 @@ async function attemptRefusalRecovery(client, baseParams) {
   catch (e) { console.log("[ai] recovery summarizer failed (" + (e.status || e.message) + "), using redaction"); }
   if (!safeSummary) { try { safeSummary = toSummarize.map(redactMemory).filter(Boolean).join(" "); } catch {} }
 
-  // Rungs 1-3 keep the (scrubbed) summary so she still has context to answer;
-  // 4 drops the whole memory index but keeps the summary; 5 is fully clean (no
-  // summary at all) in case the summary itself is what still trips it. The Opus
-  // 4.8 fallback reuses that fully-clean prompt.
+  // Escalate: strip memory first (rungs 1-3, keeping the scrubbed summary as
+  // context), then ALSO trim the conversation to just this question (rungs 4-5)
+  // in case the channel backlog is what's poisoning it, then Opus 4.8 on the
+  // fully-clean, trimmed prompt. `messages` on a rung overrides the history.
+  const trimmed = trimMessagesToLast(baseParams.messages, 1);
   const ladder = [
-    { excludeMemories: new Set(suspects.slice(0, 1)), extraContext: safeSummary },
-    { excludeMemories: new Set(suspects.slice(0, 3)), extraContext: safeSummary },
-    { excludeMemories: new Set(sensitive), extraContext: safeSummary },
-    { dropIndex: true, dropPinned: true, extraContext: safeSummary },
-    { dropIndex: true, dropPinned: true, dropLongTerm: true },
+    { opts: { excludeMemories: new Set(suspects.slice(0, 3)), extraContext: safeSummary } },
+    { opts: { excludeMemories: new Set(sensitive), extraContext: safeSummary } },
+    { opts: { dropIndex: true, dropPinned: true, extraContext: safeSummary } },
+    { opts: { dropIndex: true, dropPinned: true, extraContext: safeSummary }, messages: trimmed },
+    { opts: { dropIndex: true, dropPinned: true, dropLongTerm: true }, messages: trimmed },
+    { opts: { dropIndex: true, dropPinned: true, dropLongTerm: true }, messages: trimmed, model: "claude-opus-4-8" },
   ];
 
   let sawRateLimit = false;
   for (let i = 0; i < ladder.length; i++) {
-    const opts = ladder[i];
-    if (opts.excludeMemories && opts.excludeMemories.size === 0 && !opts.dropIndex) continue;
-    const params = { ...baseParams, system: buildSystemBlocksVariant(baseSystem, opts) };
+    const rung = ladder[i];
+    const params = { ...baseParams, system: buildSystemBlocksVariant(baseSystem, rung.opts) };
+    if (rung.messages) params.messages = rung.messages;
+    if (rung.model) params.model = rung.model;
     let resp;
     try { resp = await recoveryCall(client, params); }
     catch (e) { if (e.status === 429) sawRateLimit = true; console.log("[ai] recovery attempt " + (i + 1) + " errored (" + (e.status || e.message) + ")"); continue; }
+    console.log("[ai] recovery rung " + (i + 1) + "/" + ladder.length + ": msgs=" + params.messages.length + " model=" + (params.model || baseParams.model) + " tools=" + (params.tools ? params.tools.length : 0) + " → stop=" + resp.stop_reason);
+    if (resp.stop_reason === "refusal") continue;
+    // This config cleared the safety stop. Two cases: a plain text answer, or the
+    // model wants tools (a refusal on the FIRST call kept it out of the tool loop
+    // it would normally use — e.g. HikerAPI for a follower count). For tools, run
+    // the tool loop on this lightened config so she actually completes the task.
+    const toolBlocks = resp.content.filter((b) => b.type === "tool_use");
+    if (toolBlocks.length > 0) {
+      console.log("[ai] refusal recovered rung " + (i + 1) + "/" + ladder.length + " (wants tools) — finishing via tool loop");
+      const result = await runToolLoop(client, params.messages, params.tools || [], params.system, params.model || baseParams.model, channel, null, null);
+      if (result && result.text && result.text.trim()) return { text: result.text };
+      continue; // the loop couldn't finish either; try a lighter rung
+    }
     const text = resp.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-    if (resp.stop_reason !== "refusal" && text.trim()) {
-      console.log("[ai] refusal recovered on attempt " + (i + 1) + "/5");
+    if (text.trim()) {
+      console.log("[ai] refusal recovered rung " + (i + 1) + "/" + ladder.length + (rung.messages ? " (history trimmed)" : "") + (rung.model ? " on " + rung.model : ""));
       return { text };
     }
   }
-
-  try {
-    const opts = ladder[ladder.length - 1];
-    const params = { ...baseParams, system: buildSystemBlocksVariant(baseSystem, opts), model: "claude-opus-4-8" };
-    const resp = await recoveryCall(client, params);
-    const text = resp.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-    if (resp.stop_reason !== "refusal" && text.trim()) {
-      console.log("[ai] refusal recovered via Opus 4.8 fallback");
-      return { text };
-    }
-  } catch (e) { if (e.status === 429) sawRateLimit = true; console.log("[ai] Opus 4.8 fallback errored (" + (e.status || e.message) + ")"); }
 
   return { failure: sawRateLimit ? "rate_limited" : "refused", suspect: topSuspect };
 }
@@ -593,15 +613,21 @@ async function buildRecoveryStep(level, baseSystem, messages, cache, client) {
     cache.summary = summary;
     console.log("[ai] refusal recovery: top suspects = " + (cache.suspects.slice(0, 3).join(", ") || "(none)"));
   }
-  const opts = [
-    { excludeMemories: new Set(cache.suspects.slice(0, 3)), extraContext: cache.summary },
-    { excludeMemories: new Set(cache.sensitive), extraContext: cache.summary },
-    { dropIndex: true, dropPinned: true, extraContext: cache.summary },
-    { dropIndex: true, dropPinned: true, dropLongTerm: true },
+  // Levels 0-2 lift memory off Opus 5; 3-4 ALSO trim the conversation to just
+  // the latest turn (in case the channel backlog is the poison, not a memory);
+  // level 5 drops to Opus 4.8 on the fully-clean, trimmed prompt.
+  const trimmed = trimMessagesToLast(messages, 1);
+  const steps = [
+    { opts: { excludeMemories: new Set(cache.suspects.slice(0, 3)), extraContext: cache.summary } },
+    { opts: { excludeMemories: new Set(cache.sensitive), extraContext: cache.summary } },
+    { opts: { dropIndex: true, dropPinned: true, extraContext: cache.summary } },
+    { opts: { dropIndex: true, dropPinned: true, extraContext: cache.summary }, messages: trimmed },
+    { opts: { dropIndex: true, dropPinned: true, dropLongTerm: true }, messages: trimmed },
+    { opts: { dropIndex: true, dropPinned: true, dropLongTerm: true }, messages: trimmed, model: "claude-opus-4-8" },
   ];
-  if (level < opts.length) return { system: buildSystemBlocksVariant(baseSystem, opts[level]) };
-  if (level === opts.length) return { system: buildSystemBlocksVariant(baseSystem, opts[opts.length - 1]), model: "claude-opus-4-8" };
-  return null;
+  if (level >= steps.length) return null;
+  const st = steps[level];
+  return { system: buildSystemBlocksVariant(baseSystem, st.opts), model: st.model, messages: st.messages };
 }
 
 async function runToolLoop(client, messages, tools, systemBlocks, model, channel, taskMeta, progressMsg) {
@@ -664,9 +690,10 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
       if (response.stop_reason === "refusal" && !reply.trim()) {
         const step = await buildRecoveryStep(recoveryLevel, baseSystemBlocks, messages, recoveryCache, client);
         if (step) {
-          console.log("[ai] tool-loop refusal — recovery level " + recoveryLevel + (step.model ? " → " + step.model : "") + ", retrying with lighter memory");
+          console.log("[ai] tool-loop refusal — recovery level " + recoveryLevel + (step.model ? " → " + step.model : "") + (step.messages ? " (history trimmed)" : "") + ", retrying lighter");
           systemBlocks = step.system;
           if (step.model) recoveryModel = step.model;
+          if (step.messages) messages = step.messages;
           recoveryLevel++;
           continue;
         }
@@ -965,7 +992,7 @@ export async function handleMessage(content, authorId, channel, author, message,
       // A model-side safety stop: no content at all, not a choice to stay quiet.
       // Say so instead of posting nothing (or the canned fallback).
       history.pop();
-      const recovered = await attemptRefusalRecovery(client, params);
+      const recovered = await attemptRefusalRecovery(client, params, channel);
       if (recovered && recovered.text && recovered.text.trim()) {
         history.push({ role: "assistant", content: recovered.text });
         trimHistory(history, channel.id);
