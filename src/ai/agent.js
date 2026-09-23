@@ -8,6 +8,7 @@ import { toolSchemas, executeTool, setPendingMessage, isExtraTool, getToolTrust,
 import { buildStableSystemPrompt, buildStablePromptVariant } from "../memory/loader.js";
 import { rankSuspectMemories, allSensitiveMemoryNames, summarizeMemoryForPrompt, redactMemory } from "./refusal-recovery.js";
 import { fetchRecentMessages } from "../discord/history.js";
+import { getChannelDigest, updateChannelDigest } from "./digest.js";
 import { hasResponded, markResponded } from "../tools/responded-cache.js";
 import { getDiscordClient } from "../discord/client.js";
 import config from "../config/index.js";
@@ -160,12 +161,29 @@ function loadPersistedHistory(channelId) {
   }
 }
 
+// Turns dropped from live history but not yet folded into the channel digest.
+// Batched so the summarizer runs about once per 8 dropped turns, not per message.
+const digestPending = new Map();
+
 function trimHistory(history, channelId) {
   const max = config.ai.maxHistoryPerChannel;
+  const dropped = [];
   while (history.length > max) {
-    history.shift();
+    dropped.push(history.shift());
   }
-  if (channelId) persistHistory(channelId);
+  if (!channelId) return;
+  persistHistory(channelId);
+  if (dropped.length) {
+    const buf = digestPending.get(channelId) || [];
+    for (const d of dropped) buf.push(d);
+    if (buf.length >= 8) {
+      digestPending.set(channelId, []);
+      // Fire-and-forget: keep continuity for turns that scrolled out of context.
+      getClient().then((c) => updateChannelDigest(c, channelId, buf)).catch(() => {});
+    } else {
+      digestPending.set(channelId, buf);
+    }
+  }
 }
 
 async function ensureHistoryLoaded(channelId) {
@@ -821,7 +839,11 @@ export async function handleMessage(content, authorId, channel, author, message,
   const addressed = isAddressedToMe(content, message);
   const channelCtx = buildChannelContext(channel, author, trust, addressed, content);
   const bgNote = getBackgroundTaskNote(channel.id);
-  const dynamicContext = "\n\n# CURRENT CONTEXT\n\n" + channelCtx + bgNote;
+  const digest = getChannelDigest(channel.id);
+  const digestBlock = digest
+    ? "\n\n# EARLIER IN THIS CHANNEL (running summary of older messages that scrolled out of live history)\n\nUse this for continuity when a question refers back to something from before. It is a summary, so re-check specifics with a tool or your memory before stating them as fact.\n\n" + digest
+    : "";
+  const dynamicContext = "\n\n# CURRENT CONTEXT\n\n" + channelCtx + bgNote + digestBlock;
   const systemBlocks = buildSystemBlocks(dynamicContext);
   const history = getHistory(channel.id);
 

@@ -1,5 +1,11 @@
 const CONTEXT_WINDOW = 1000000;
-const CONTEXT_TARGET = 0.45;  // est tokens undercount dense JSON ~1.5x; trigger well below the 1M hard limit
+// The requests do NOT send the 1M-context beta, so the real ceiling is the
+// standard 200k window. estimateTokens undercounts dense JSON by ~1.5x, so keep
+// the trigger low enough that real tokens stay well under 200k: 0.12 * 1M = 120k
+// est ~= 180k real. (If 1M context is ever verified as available on this token,
+// raise this back toward 0.45.) The rolling channel digest, not a bigger window,
+// is what preserves continuity past the cap.
+const CONTEXT_TARGET = 0.12;
 
 export function estimateTokens(obj) {
   if (typeof obj === "string") return Math.ceil(obj.length / 3.5);
