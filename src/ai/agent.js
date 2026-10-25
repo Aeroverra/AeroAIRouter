@@ -791,7 +791,11 @@ function sendBgResult(channel, history, taskKey, result) {
   // past output, or she learns that typing it is a normal thing to send.
   const stored = isSilenceReply(finalText) ? SILENT_TURN_MARKER : finalText;
   if (idx !== -1) {
-    history[idx] = { role: "assistant", content: stored };
+    // In place, not a new object: a turn that was answered while this task ran
+    // froze a snapshot holding this same placeholder, and its own background
+    // work (chained per channel, so it starts after this) should see the real
+    // answer instead of a "don't touch this" stub.
+    history[idx].content = stored;
     persistHistory(channel.id);
   } else {
     history.push({ role: "assistant", content: stored });
@@ -825,37 +829,74 @@ function sendBgResult(channel, history, taskKey, result) {
   })();
 }
 
-export async function handleMessage(content, authorId, channel, author, message, attachments = []) {
-  await ensureHistoryLoaded(channel.id);
+// One model turn per channel at a time. Without this, a message that lands while
+// the previous one is still being answered starts its own call on a history
+// snapshot that holds both messages but neither reply, so both calls answer the
+// first message (seen live: two different Trawler answers to one Pixel question,
+// 8 seconds apart). Messages that arrive mid-turn wait, and when the turn ends
+// every queued message from the same person is answered as ONE turn, with the
+// earlier reply already in context. Only the last message of a batch gets the
+// reply; the others resolve to null, which posts nothing.
+const channelTurns = new Map();
+// Safety valve: a turn that hangs this long stops holding up the channel. It
+// still delivers its own reply whenever it finishes.
+const TURN_WAIT_MAX_MS = 120000;
 
-  const client = await getClient();
-  const trust = getTrustLevel(authorId);
-  const model = pickModel(content, authorId);
-  const tools = filterToolsForTrust(trust);
-  const cachedTools = getCachedToolSchemas(tools);
-  // Aimed-at-her messages are never candidates for silence, so the ambient
-  // "should I speak" block is swapped for an answer-it instruction. Mirrors the
-  // wake conditions the router uses for "name" mode.
-  const addressed = isAddressedToMe(content, message);
-  const channelCtx = buildChannelContext(channel, author, trust, addressed, content);
-  const bgNote = getBackgroundTaskNote(channel.id);
-  const digest = getChannelDigest(channel.id);
-  const digestBlock = digest
-    ? "\n\n# EARLIER IN THIS CHANNEL (running summary of older messages that scrolled out of live history)\n\nUse this for continuity when a question refers back to something from before. It is a summary, so re-check specifics with a tool or your memory before stating them as fact.\n\n" + digest
-    : "";
-  const dynamicContext = "\n\n# CURRENT CONTEXT\n\n" + channelCtx + bgNote + digestBlock;
-  const systemBlocks = buildSystemBlocks(dynamicContext);
-  const history = getHistory(channel.id);
+export function handleMessage(content, authorId, channel, author, message, attachments = []) {
+  return new Promise((resolve, reject) => {
+    const entry = { content, authorId, channel, author, message, attachments, resolve, reject };
+    const state = channelTurns.get(channel.id);
+    if (state) {
+      state.queue.push(entry);
+      console.log("[ai] " + (author.displayName || author.username) + " in #" + channel.name + ": queued behind the turn in progress (" + state.queue.length + " waiting)");
+      return;
+    }
+    const fresh = { queue: [entry] };
+    channelTurns.set(channel.id, fresh);
+    drainChannelTurns(channel.id, fresh);
+  });
+}
 
-  if (message) {
-    markResponded(message.id);
-    setPendingMessage(message);
+async function drainChannelTurns(channelId, state) {
+  while (state.queue.length > 0) {
+    const batch = [state.queue.shift()];
+    // A burst from one person is one turn. Scheduled tasks (no Discord message)
+    // never merge with anything.
+    while (state.queue.length > 0 && batch[0].message && state.queue[0].message && state.queue[0].authorId === batch[0].authorId) {
+      batch.push(state.queue.shift());
+    }
+    const last = batch[batch.length - 1];
+    const turn = runTurn(batch).then(
+      (reply) => { for (const e of batch) e.resolve(e === last ? reply : null); },
+      (err) => { for (const e of batch) e === last ? e.reject(err) : e.resolve(null); }
+    );
+    let timer;
+    const waited = new Promise((r) => {
+      timer = setTimeout(() => {
+        console.log("[ai] Turn in #" + last.channel.name + " still running after " + TURN_WAIT_MAX_MS / 1000 + "s, letting the next message through");
+        r();
+      }, TURN_WAIT_MAX_MS);
+    });
+    await Promise.race([turn, waited]);
+    clearTimeout(timer);
   }
+  channelTurns.delete(channelId);
+}
 
-  // If this message is a reply, pull the replied-to message into context so the model
-  // sees what it's responding to (uses the handler's pre-resolved __repliedTo, else
-  // resolves here — covers boot catch-up and other entry paths).
-  let replyPrefix = "";
+// Take this turn's user messages back out of history (failed or refused turn).
+// By identity, not pop(), because a background task can append its result
+// while the call is in flight.
+function dropTurns(history, turns) {
+  for (const t of turns) {
+    const i = history.lastIndexOf(t);
+    if (i !== -1) history.splice(i, 1);
+  }
+}
+
+// If this message is a reply, pull the replied-to message into context so the model
+// sees what it's responding to (uses the handler's pre-resolved __repliedTo, else
+// resolves here — covers boot catch-up and other entry paths).
+async function replyContextFor(message) {
   if (message && message.reference && message.reference.messageId) {
     let ref = message.__repliedTo;
     if (ref === undefined) {
@@ -877,17 +918,60 @@ export async function handleMessage(content, authorId, channel, author, message,
         leadup = [...before.values()].reverse().map((m) => nameOf(m) + ": " + textOf(m));
       } catch { /* can't fetch history — just use the one message */ }
       const lines = [...leadup, "→ " + nameOf(ref) + ": " + textOf(ref)];
-      replyPrefix = "[you're replying to this message" + (leadup.length ? " (with the messages just before it, for context)" : "") + ":\n" + lines.join("\n") + "\n]\n";
+      return "[you're replying to this message" + (leadup.length ? " (with the messages just before it, for context)" : "") + ":\n" + lines.join("\n") + "\n]\n";
     }
   }
-  const textContent = "[" + (author.displayName || author.username) + "]: " + replyPrefix + content;
-  // Persist images as real vision blocks (not just a text description) so later
-  // turns that refer back to an earlier image can still see it. enforceImageBudget
-  // caps how many recent images stay hydrated.
-  const userContent = attachments.length > 0
-    ? [...attachments, { type: "text", text: textContent }]
-    : textContent;
-  history.push({ role: "user", content: userContent });
+  return "";
+}
+
+async function runTurn(batch) {
+  const last = batch[batch.length - 1];
+  const { authorId, channel, author, message } = last;
+  const content = batch.map((e) => e.content).join("\n");
+  const attachments = batch.flatMap((e) => e.attachments);
+  await ensureHistoryLoaded(channel.id);
+
+  const client = await getClient();
+  const trust = getTrustLevel(authorId);
+  const model = pickModel(content, authorId);
+  const tools = filterToolsForTrust(trust);
+  const cachedTools = getCachedToolSchemas(tools);
+  // Aimed-at-her messages are never candidates for silence, so the ambient
+  // "should I speak" block is swapped for an answer-it instruction. Mirrors the
+  // wake conditions the router uses for "name" mode.
+  const addressed = batch.some((e) => isAddressedToMe(e.content, e.message));
+  const channelCtx = buildChannelContext(channel, author, trust, addressed, content);
+  const burstNote = batch.length > 1
+    ? "\n" + (author.displayName || author.username) + " sent " + batch.length + " messages in a row while you were busy. They are the last " + batch.length + " user messages above: answer them together in ONE reply, and do not repeat anything you already said in your previous message."
+    : "";
+  const bgNote = getBackgroundTaskNote(channel.id);
+  const digest = getChannelDigest(channel.id);
+  const digestBlock = digest
+    ? "\n\n# EARLIER IN THIS CHANNEL (running summary of older messages that scrolled out of live history)\n\nUse this for continuity when a question refers back to something from before. It is a summary, so re-check specifics with a tool or your memory before stating them as fact.\n\n" + digest
+    : "";
+  const dynamicContext = "\n\n# CURRENT CONTEXT\n\n" + channelCtx + burstNote + bgNote + digestBlock;
+  const systemBlocks = buildSystemBlocks(dynamicContext);
+  const history = getHistory(channel.id);
+
+  for (const e of batch) {
+    if (e.message) markResponded(e.message.id);
+  }
+  if (message) setPendingMessage(message);
+
+  // One user turn per Discord message, same shape as when they arrive one at a time.
+  const userTurns = [];
+  for (const e of batch) {
+    const textContent = "[" + (e.author.displayName || e.author.username) + "]: " + (await replyContextFor(e.message)) + e.content;
+    // Persist images as real vision blocks (not just a text description) so later
+    // turns that refer back to an earlier image can still see it. enforceImageBudget
+    // caps how many recent images stay hydrated.
+    const userContent = e.attachments.length > 0
+      ? [...e.attachments, { type: "text", text: textContent }]
+      : textContent;
+    const turn = { role: "user", content: userContent };
+    history.push(turn);
+    userTurns.push(turn);
+  }
   enforceImageBudget(history);
   trimHistory(history, channel.id);
   historyTimestamps.set(channel.id, Date.now());
@@ -897,7 +981,7 @@ export async function handleMessage(content, authorId, channel, author, message,
   let frozenMessages = [...history];
 
   const bgCount = (activeBackgroundTasks.get(channel.id)?.size || 0) + getActiveAgents().size;
-  console.log("[ai] " + (author.displayName || author.username) + " in #" + channel.name + ": model=" + model + ", trust=" + trust + ", tools=" + tools.length + ", images=" + attachments.length + ", bgTasks=" + bgCount);
+  console.log("[ai] " + (author.displayName || author.username) + " in #" + channel.name + ": model=" + model + ", trust=" + trust + ", tools=" + tools.length + ", images=" + attachments.length + ", bgTasks=" + bgCount + (batch.length > 1 ? ", batched=" + batch.length : ""));
 
   const complex = isComplex(content) && tools.length > 0;
 
@@ -954,7 +1038,7 @@ export async function handleMessage(content, authorId, channel, author, message,
   } catch (err) {
     console.error("[ai] API error (first-call):", err.status, err.message?.substring(0, 300));
     console.error("[ai] API error stack:", err.stack?.substring(0, 500));
-    history.pop();
+    dropTurns(history, userTurns);
     if (err.status === 429) {
       return "I am being rate limited right now, give me a moment " + emoji() + "";
     }
@@ -1013,7 +1097,7 @@ export async function handleMessage(content, authorId, channel, author, message,
     if (response.stop_reason === "refusal" && !reply.trim()) {
       // A model-side safety stop: no content at all, not a choice to stay quiet.
       // Say so instead of posting nothing (or the canned fallback).
-      history.pop();
+      dropTurns(history, userTurns);
       const recovered = await attemptRefusalRecovery(client, params, channel);
       if (recovered && recovered.text && recovered.text.trim()) {
         history.push({ role: "assistant", content: recovered.text });

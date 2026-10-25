@@ -221,9 +221,9 @@ describe("snapshot timing verification", () => {
   it("history snapshot is taken BEFORE any API call", () => {
     const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
 
-    // Find handleMessage function start so we only check within it
-    const handleStart = source.indexOf("export async function handleMessage");
-    assert.ok(handleStart > 0, "handleMessage function not found");
+    // Find runTurn (the body behind handleMessage's per-channel queue) so we only check within it
+    const handleStart = source.indexOf("async function runTurn(");
+    assert.ok(handleStart > 0, "runTurn function not found");
 
     // The typing indicator moved out to discord/client.js, so the race that matters
     // here is snapshot vs. the first API call: a concurrent message must not be able
@@ -232,14 +232,14 @@ describe("snapshot timing verification", () => {
     const snapshotPos = handleSource.indexOf("frozenMessages = [...history]");
     const firstApiPos = handleSource.indexOf("streamApiCall(client, params)");
 
-    assert.ok(snapshotPos > 0, "snapshot call not found in handleMessage");
-    assert.ok(firstApiPos > 0, "first API call not found in handleMessage");
+    assert.ok(snapshotPos > 0, "snapshot call not found in runTurn");
+    assert.ok(firstApiPos > 0, "first API call not found in runTurn");
     assert.ok(snapshotPos < firstApiPos, "RACE CONDITION: snapshot must be taken BEFORE the first API call");
   });
 
   it("bg task registration happens BEFORE the first API call in complex path", () => {
     const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
-    const handleStart = source.indexOf("export async function handleMessage");
+    const handleStart = source.indexOf("async function runTurn(");
     const handleSource = source.substring(handleStart);
     const registerLine = handleSource.indexOf("registerBackgroundTask(channel.id, taskKey");
     const firstApiPos = handleSource.indexOf("streamApiCall(client, params)");
@@ -247,6 +247,27 @@ describe("snapshot timing verification", () => {
     assert.ok(registerLine > 0, "registerBackgroundTask not found");
     assert.ok(firstApiPos > 0, "first API call not found");
     assert.ok(registerLine < firstApiPos, "bg task must be registered BEFORE the first API call so concurrent messages see the warning");
+  });
+
+  it("handleMessage runs one turn per channel and batches a burst from one person", () => {
+    const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
+    const handleSource = source.substring(source.indexOf("export function handleMessage("), source.indexOf("async function drainChannelTurns("));
+    const drainSource = source.substring(source.indexOf("async function drainChannelTurns("), source.indexOf("function dropTurns("));
+
+    // A message arriving mid-turn must wait in the channel's queue, not start its
+    // own call on a snapshot that is missing the reply in progress.
+    assert.ok(handleSource.includes("channelTurns.get(channel.id)"), "handleMessage must look up the channel's turn in progress");
+    assert.ok(handleSource.includes("state.queue.push(entry)"), "a mid-turn message must be queued");
+    assert.ok(drainSource.includes("runTurn(batch)"), "the queue must drain through runTurn");
+    assert.ok(drainSource.includes("state.queue[0].authorId === batch[0].authorId"), "queued messages from the same person must batch into one turn");
+    assert.ok(drainSource.includes("e === last ? reply : null"), "only the last message of a batch gets the reply");
+  });
+
+  it("failed or refused turns drop their own user turns, not history.pop()", () => {
+    const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
+    const turnSource = source.substring(source.indexOf("async function runTurn("));
+    assert.ok(!/history\.pop\(\)/.test(turnSource), "pop() can remove a background result or a batched message instead of this turn's");
+    assert.ok((turnSource.match(/dropTurns\(history, userTurns\)/g) || []).length >= 2, "error and refusal paths must use dropTurns");
   });
 
   it("non-complex tool-use path also registers bg task and pushes placeholder", () => {
