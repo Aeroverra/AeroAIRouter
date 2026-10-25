@@ -287,14 +287,16 @@ describe("snapshot timing verification", () => {
     assert.ok((turnSource.match(/dropTurns\(history, flight\.group\)/g) || []).length >= 2, "error and refusal paths must drop the turn's messages, follow-ups included");
   });
 
-  it("a follow-up from the same person joins the reply in progress", () => {
+  it("a follow-up, from anyone with enough trust, joins the reply in progress", () => {
     const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
     const handleSource = source.substring(source.indexOf("export async function handleMessage("), source.indexOf("async function runTurn("));
     const targetSource = source.substring(source.indexOf("async function followUpTarget("), source.indexOf("async function absorbFollowUp("));
     const absorbSource = source.substring(source.indexOf("async function absorbFollowUp("), source.indexOf("function insertAfter("));
     assert.ok(handleSource.indexOf("followUpTarget(") < handleSource.indexOf("runTurn("), "check for a reply to join before starting a new one");
-    assert.ok(targetSource.includes("f.open && f.chat && f.authorId === authorId"), "only the same person's open chat request can be joined");
-    assert.ok(targetSource.includes("isFollowUp("), "joining is decided by the follow-up check, not every message");
+    // A follow-up steers that turn's tools: never let a lower-trust person into a higher-trust run.
+    assert.ok(targetSource.includes("f.open && f.chat && (TRUST_RANK[f.trust] ?? 0) <= rank"), "only open chat requests at the sender's trust or lower can be joined");
+    assert.ok(handleSource.includes("trust: getTrustLevel(authorId)"), "each turn records the trust it runs at");
+    assert.ok(targetSource.includes("pickFollowUp("), "joining is decided by the follow-up check, not every message");
     // Built before the open check, then everything after it is synchronous, so the
     // reply can't go out between the check and the follow-up landing in its inbox.
     const openPos = absorbSource.indexOf("if (!flight.open) return false");
@@ -317,14 +319,18 @@ describe("snapshot timing verification", () => {
     assert.ok(streamSource.indexOf("stream.aborted") < streamSource.indexOf("const transient"), "a stopped draft must not be retried as a dropped connection");
   });
 
-  it("isFollowUp says yes only on a clear FOLLOW_UP and fails safe to separate", async () => {
-    const { isFollowUp } = await import(join(SRC_DIR, "ai", "followup.js"));
+  it("pickFollowUp returns the picked request and fails safe to separate", async () => {
+    const { pickFollowUp } = await import(join(SRC_DIR, "ai", "followup.js"));
     const answer = (text) => ({ messages: { create: async () => ({ content: [{ type: "text", text }] }) } });
-    assert.equal(await isFollowUp(answer("FOLLOW_UP"), "tell me my fishing xp", "i mean farming"), true);
-    assert.equal(await isFollowUp(answer("SEPARATE"), "tell me my fishing xp", "lol nice frog"), false);
-    assert.equal(await isFollowUp(answer("maybe"), "a", "b"), false);
+    const reqs = [{ who: "Pixel", text: "best sailing method?" }, { who: "Nick", text: "tell me my fishing xp" }];
+    assert.equal(await pickFollowUp(answer("2"), reqs, "Sam", "he means farming"), 1);
+    assert.equal(await pickFollowUp(answer("1."), reqs, "Pixel", "for money not xp"), 0);
+    assert.equal(await pickFollowUp(answer("NONE"), reqs, "Sam", "lol nice frog"), -1);
+    assert.equal(await pickFollowUp(answer("3"), reqs, "Sam", "x"), -1, "a number outside the list is not a pick");
+    assert.equal(await pickFollowUp(answer("maybe"), reqs, "Sam", "x"), -1);
+    assert.equal(await pickFollowUp(answer("1"), [], "Sam", "x"), -1);
     const broken = { messages: { create: async () => { throw Object.assign(new Error("timeout"), { status: 408 }); } } };
-    assert.equal(await isFollowUp(broken, "a", "b"), false);
+    assert.equal(await pickFollowUp(broken, reqs, "Sam", "x"), -1);
   });
 
   it("non-complex tool-use path also registers bg task and pushes placeholder", () => {

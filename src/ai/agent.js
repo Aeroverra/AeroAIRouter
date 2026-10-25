@@ -9,7 +9,7 @@ import { buildStableSystemPrompt, buildStablePromptVariant } from "../memory/loa
 import { rankSuspectMemories, allSensitiveMemoryNames, summarizeMemoryForPrompt, redactMemory } from "./refusal-recovery.js";
 import { fetchRecentMessages } from "../discord/history.js";
 import { getChannelDigest, updateChannelDigest } from "./digest.js";
-import { isFollowUp } from "./followup.js";
+import { pickFollowUp } from "./followup.js";
 import { hasResponded, markResponded } from "../tools/responded-cache.js";
 import { getDiscordClient } from "../discord/client.js";
 import config from "../config/index.js";
@@ -856,10 +856,10 @@ function sendBgResult(channel, history, taskKey, result) {
 // Pixel question, 8 seconds apart):
 //  - a new turn's snapshot gets a stand-in reply after every message that already
 //    has one on the way, so it answers only its own message;
-//  - a follow-up from the same person ("tell me my fishing xp", then "i mean
-//    farming") is folded into the reply they already have in progress, which
-//    takes it into account and answers once.
-// A flight: { channelId, authorId, chat, request, group, anchor, inbox, open, handedOff, abort }.
+//  - a follow-up ("tell me my fishing xp", then "i mean farming", or someone
+//    else adding "he means farming") is folded into the reply already in
+//    progress, which takes it into account and answers once.
+// A flight: { channelId, authorId, who, trust, chat, request, group, anchor, inbox, open, handedOff, abort }.
 const inFlightTurns = new Map();
 const REPLY_IN_PROGRESS = "[REPLY IN PROGRESS: you are already answering the message above in a separate reply that will be posted on its own. Do not answer it again here. Respond only to the newest message.]";
 
@@ -893,15 +893,21 @@ function takeFollowUps(flight) {
     : { role: "user", content: [{ type: "text", text: note }, ...t.content] });
 }
 
-// The chat request this person still has in progress here, if the new message
-// belongs to it. Only asks the classifier when there is one to join.
-async function followUpTarget(channelId, authorId, content) {
+const TRUST_RANK = { none: 0, light: 1, elevated: 2, owner: 3 };
+
+// The chat request in progress here that the new message belongs to, from
+// anyone ("he means farming" counts), or null. A message can only join a
+// request running at its own trust level or lower: a follow-up steers that
+// turn's tools, so a lower-trust person must not steer an owner's run. Only
+// asks the classifier when there is something it could join.
+async function followUpTarget(channelId, authorId, who, content) {
   const flights = inFlightTurns.get(channelId);
   if (!flights) return null;
-  const mine = [...flights].filter((f) => f.open && f.chat && f.authorId === authorId);
-  const flight = mine[mine.length - 1];
-  if (!flight) return null;
-  return (await isFollowUp(await getClient(), flight.request, content)) ? flight : null;
+  const rank = TRUST_RANK[getTrustLevel(authorId)] ?? 0;
+  const open = [...flights].filter((f) => f.open && f.chat && (TRUST_RANK[f.trust] ?? 0) <= rank);
+  if (open.length === 0) return null;
+  const idx = await pickFollowUp(await getClient(), open.map((f) => ({ who: f.who, text: f.request })), who, content);
+  return idx >= 0 ? open[idx] : null;
 }
 
 // Join a follow-up to the reply in progress: into history right after the
@@ -915,7 +921,7 @@ async function absorbFollowUp(flight, content, author, message, attachments) {
   flight.anchor = userTurn;
   flight.group.push(userTurn);
   flight.inbox.push(userTurn);
-  flight.request += "\n" + content;
+  flight.request += "\n" + (author.displayName || author.username) + ": " + content;
   markResponded(message.id);
   trimHistory(history, flight.channelId);
   if (flight.abort) flight.abort();
@@ -986,13 +992,13 @@ async function replyContextFor(message) {
 
 export async function handleMessage(content, authorId, channel, author, message, attachments = []) {
   if (message) {
-    const target = await followUpTarget(channel.id, authorId, content);
+    const target = await followUpTarget(channel.id, authorId, author.displayName || author.username, content);
     if (target && await absorbFollowUp(target, content, author, message, attachments)) {
       console.log("[ai] " + (author.displayName || author.username) + " in #" + channel.name + ": follow-up, folded into the reply in progress");
       return null;
     }
   }
-  const flight = { channelId: channel.id, authorId, chat: !!message, request: content, group: [], anchor: null, inbox: [], open: true, handedOff: false, abort: null };
+  const flight = { channelId: channel.id, authorId, who: author.displayName || author.username, trust: getTrustLevel(authorId), chat: !!message, request: content, group: [], anchor: null, inbox: [], open: true, handedOff: false, abort: null };
   try {
     return await runTurn(flight, content, authorId, channel, author, message, attachments);
   } finally {
