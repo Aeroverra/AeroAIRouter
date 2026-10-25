@@ -87,9 +87,9 @@ describe("background task queue", () => {
     assert.ok(calls >= 2, "Expected at least 2 startBgWork calls, found " + calls);
   });
 
-  it("agent.js defines startBgWork with promise chaining", () => {
+  it("agent.js runs background work in parallel, not chained per channel", () => {
     const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
-    assert.ok(source.includes("bgTaskChain"), "Should use bgTaskChain for per-channel serialization");
+    assert.ok(!source.includes("bgTaskChain"), "a long background job must not hold up a quick lookup in the same channel");
     assert.ok(source.includes("function startBgWork"), "Should define startBgWork");
   });
 });

@@ -221,7 +221,7 @@ describe("snapshot timing verification", () => {
   it("history snapshot is taken BEFORE any API call", () => {
     const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
 
-    // Find runTurn (the body behind handleMessage's per-channel queue) so we only check within it
+    // Find runTurn (the body behind handleMessage) so we only check within it
     const handleStart = source.indexOf("async function runTurn(");
     assert.ok(handleStart > 0, "runTurn function not found");
 
@@ -229,7 +229,7 @@ describe("snapshot timing verification", () => {
     // here is snapshot vs. the first API call: a concurrent message must not be able
     // to mutate the history array between the snapshot and the request.
     const handleSource = source.substring(handleStart);
-    const snapshotPos = handleSource.indexOf("frozenMessages = [...history]");
+    const snapshotPos = handleSource.indexOf("frozenMessages = snapshotWithRepliesInProgress(history");
     const firstApiPos = handleSource.indexOf("streamApiCall(client, params)");
 
     assert.ok(snapshotPos > 0, "snapshot call not found in runTurn");
@@ -249,25 +249,42 @@ describe("snapshot timing verification", () => {
     assert.ok(registerLine < firstApiPos, "bg task must be registered BEFORE the first API call so concurrent messages see the warning");
   });
 
-  it("handleMessage runs one turn per channel and batches a burst from one person", () => {
+  it("turns run in parallel, and a new turn sees replies already in progress", () => {
     const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
-    const handleSource = source.substring(source.indexOf("export function handleMessage("), source.indexOf("async function drainChannelTurns("));
-    const drainSource = source.substring(source.indexOf("async function drainChannelTurns("), source.indexOf("function dropTurns("));
+    const handleSource = source.substring(source.indexOf("export async function handleMessage("), source.indexOf("async function runTurn("));
+    const turnSource = source.substring(source.indexOf("async function runTurn("));
 
-    // A message arriving mid-turn must wait in the channel's queue, not start its
-    // own call on a snapshot that is missing the reply in progress.
-    assert.ok(handleSource.includes("channelTurns.get(channel.id)"), "handleMessage must look up the channel's turn in progress");
-    assert.ok(handleSource.includes("state.queue.push(entry)"), "a mid-turn message must be queued");
-    assert.ok(drainSource.includes("runTurn(batch)"), "the queue must drain through runTurn");
-    assert.ok(drainSource.includes("state.queue[0].authorId === batch[0].authorId"), "queued messages from the same person must batch into one turn");
-    assert.ok(drainSource.includes("e === last ? reply : null"), "only the last message of a batch gets the reply");
+    // No queue: a fast message must start its own reply right away.
+    assert.ok(!/channelTurns|drainChannelTurns/.test(source), "turns in one channel must not wait on each other");
+    // But it must not answer a message whose reply is still being written.
+    const snapshotPos = turnSource.indexOf("frozenMessages = snapshotWithRepliesInProgress(history, channel.id)");
+    const registerPos = turnSource.indexOf("inFlightTurns.get(channel.id).add(userTurn)");
+    assert.ok(snapshotPos > 0, "snapshot must mark replies in progress");
+    assert.ok(registerPos > snapshotPos, "a turn registers itself only after its own snapshot, or it would mark itself");
+    assert.ok(handleSource.includes("finally") && handleSource.includes("inFlightTurns.get(channel.id)?.delete(flight.turn)"), "a finished or failed turn must stop counting as in progress");
   });
 
-  it("failed or refused turns drop their own user turns, not history.pop()", () => {
+  it("snapshotWithRepliesInProgress adds a stand-in only after unanswered in-flight messages", async () => {
+    const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
+    const fnSrc = source.substring(source.indexOf("function snapshotWithRepliesInProgress("), source.indexOf("// Store a reply right after"));
+    const make = new Function("inFlightTurns", "REPLY_IN_PROGRESS", fnSrc + "\nreturn snapshotWithRepliesInProgress;");
+    const p1 = { role: "user", content: "[Pixel]: trawling?" };
+    const p2 = { role: "user", content: "[Pixel]: sailing too?" };
+    const answered = { role: "user", content: "[Nick]: xp?" };
+    const reply = { role: "assistant", content: "93" };
+    const fn = make(new Map([["c", new Set([p1, answered])]]), "STANDIN");
+    const out = fn([answered, reply, p1, p2], "c");
+    assert.deepEqual(out.map((m) => m.content), ["[Nick]: xp?", "93", "[Pixel]: trawling?", "STANDIN", "[Pixel]: sailing too?"]);
+    assert.equal(fn([p2], "other").length, 1, "no in-flight turns means a plain copy");
+  });
+
+  it("replies are stored right after their own message, and failed turns drop only their own", () => {
     const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
     const turnSource = source.substring(source.indexOf("async function runTurn("));
-    assert.ok(!/history\.pop\(\)/.test(turnSource), "pop() can remove a background result or a batched message instead of this turn's");
-    assert.ok((turnSource.match(/dropTurns\(history, userTurns\)/g) || []).length >= 2, "error and refusal paths must use dropTurns");
+    assert.ok(!/history\.pop\(\)/.test(turnSource), "pop() can remove another turn's message or a background result");
+    assert.ok(!/history\.push\(\{ role: "assistant"/.test(turnSource), "a reply pushed at the end reads as the answer to whatever came in after it");
+    assert.ok((turnSource.match(/insertReply\(history, userTurn, /g) || []).length >= 4, "every reply/placeholder path must use insertReply");
+    assert.ok((turnSource.match(/dropTurn\(history, userTurn\)/g) || []).length >= 2, "error and refusal paths must use dropTurn");
   });
 
   it("non-complex tool-use path also registers bg task and pushes placeholder", () => {
