@@ -230,7 +230,7 @@ describe("snapshot timing verification", () => {
     // to mutate the history array between the snapshot and the request.
     const handleSource = source.substring(handleStart);
     const snapshotPos = handleSource.indexOf("frozenMessages = snapshotWithRepliesInProgress(history");
-    const firstApiPos = handleSource.indexOf("streamApiCall(client, params)");
+    const firstApiPos = handleSource.indexOf("streamApiCall(client, params");
 
     assert.ok(snapshotPos > 0, "snapshot call not found in runTurn");
     assert.ok(firstApiPos > 0, "first API call not found in runTurn");
@@ -242,7 +242,7 @@ describe("snapshot timing verification", () => {
     const handleStart = source.indexOf("async function runTurn(");
     const handleSource = source.substring(handleStart);
     const registerLine = handleSource.indexOf("registerBackgroundTask(channel.id, taskKey");
-    const firstApiPos = handleSource.indexOf("streamApiCall(client, params)");
+    const firstApiPos = handleSource.indexOf("streamApiCall(client, params");
 
     assert.ok(registerLine > 0, "registerBackgroundTask not found");
     assert.ok(firstApiPos > 0, "first API call not found");
@@ -258,33 +258,73 @@ describe("snapshot timing verification", () => {
     assert.ok(!/channelTurns|drainChannelTurns/.test(source), "turns in one channel must not wait on each other");
     // But it must not answer a message whose reply is still being written.
     const snapshotPos = turnSource.indexOf("frozenMessages = snapshotWithRepliesInProgress(history, channel.id)");
-    const registerPos = turnSource.indexOf("inFlightTurns.get(channel.id).add(userTurn)");
+    const registerPos = turnSource.indexOf("inFlightTurns.get(channel.id).add(flight)");
     assert.ok(snapshotPos > 0, "snapshot must mark replies in progress");
     assert.ok(registerPos > snapshotPos, "a turn registers itself only after its own snapshot, or it would mark itself");
-    assert.ok(handleSource.includes("finally") && handleSource.includes("inFlightTurns.get(channel.id)?.delete(flight.turn)"), "a finished or failed turn must stop counting as in progress");
+    assert.ok(/finally \{[\s\S]*if \(!flight\.handedOff\) closeFlight\(flight\)/.test(handleSource), "a finished or failed turn must stop counting as in progress");
   });
 
-  it("snapshotWithRepliesInProgress adds a stand-in only after unanswered in-flight messages", async () => {
+  it("snapshotWithRepliesInProgress adds a stand-in only after unanswered in-flight messages", () => {
     const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
-    const fnSrc = source.substring(source.indexOf("function snapshotWithRepliesInProgress("), source.indexOf("// Store a reply right after"));
+    const fnSrc = source.substring(source.indexOf("function snapshotWithRepliesInProgress("), source.indexOf("function closeFlight("));
     const make = new Function("inFlightTurns", "REPLY_IN_PROGRESS", fnSrc + "\nreturn snapshotWithRepliesInProgress;");
     const p1 = { role: "user", content: "[Pixel]: trawling?" };
     const p2 = { role: "user", content: "[Pixel]: sailing too?" };
     const answered = { role: "user", content: "[Nick]: xp?" };
     const reply = { role: "assistant", content: "93" };
-    const fn = make(new Map([["c", new Set([p1, answered])]]), "STANDIN");
+    const fn = make(new Map([["c", new Set([{ anchor: p1 }, { anchor: answered }])]]), "STANDIN");
     const out = fn([answered, reply, p1, p2], "c");
     assert.deepEqual(out.map((m) => m.content), ["[Nick]: xp?", "93", "[Pixel]: trawling?", "STANDIN", "[Pixel]: sailing too?"]);
     assert.equal(fn([p2], "other").length, 1, "no in-flight turns means a plain copy");
   });
 
-  it("replies are stored right after their own message, and failed turns drop only their own", () => {
+  it("replies are stored right after their own messages, and failed turns drop only their own", () => {
     const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
     const turnSource = source.substring(source.indexOf("async function runTurn("));
     assert.ok(!/history\.pop\(\)/.test(turnSource), "pop() can remove another turn's message or a background result");
     assert.ok(!/history\.push\(\{ role: "assistant"/.test(turnSource), "a reply pushed at the end reads as the answer to whatever came in after it");
-    assert.ok((turnSource.match(/insertReply\(history, userTurn, /g) || []).length >= 4, "every reply/placeholder path must use insertReply");
-    assert.ok((turnSource.match(/dropTurn\(history, userTurn\)/g) || []).length >= 2, "error and refusal paths must use dropTurn");
+    assert.ok((turnSource.match(/insertAfter\(history, flight\.anchor, /g) || []).length >= 4, "every reply/placeholder path must store after the turn's last message");
+    assert.ok((turnSource.match(/dropTurns\(history, flight\.group\)/g) || []).length >= 2, "error and refusal paths must drop the turn's messages, follow-ups included");
+  });
+
+  it("a follow-up from the same person joins the reply in progress", () => {
+    const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
+    const handleSource = source.substring(source.indexOf("export async function handleMessage("), source.indexOf("async function runTurn("));
+    const targetSource = source.substring(source.indexOf("async function followUpTarget("), source.indexOf("async function absorbFollowUp("));
+    const absorbSource = source.substring(source.indexOf("async function absorbFollowUp("), source.indexOf("function insertAfter("));
+    assert.ok(handleSource.indexOf("followUpTarget(") < handleSource.indexOf("runTurn("), "check for a reply to join before starting a new one");
+    assert.ok(targetSource.includes("f.open && f.chat && f.authorId === authorId"), "only the same person's open chat request can be joined");
+    assert.ok(targetSource.includes("isFollowUp("), "joining is decided by the follow-up check, not every message");
+    // Built before the open check, then everything after it is synchronous, so the
+    // reply can't go out between the check and the follow-up landing in its inbox.
+    const openPos = absorbSource.indexOf("if (!flight.open) return false");
+    assert.ok(absorbSource.indexOf("await buildUserTurn(") < openPos, "build the turn before checking the reply is still open");
+    assert.ok(!/await/.test(absorbSource.substring(openPos)), "no await between the open check and the inbox push");
+    assert.ok(absorbSource.includes("flight.inbox.push(userTurn)") && absorbSource.includes("if (flight.abort) flight.abort()"), "queue it for the reply and stop a draft in progress");
+  });
+
+  it("the direct reply is redone with follow-ups, and a tool run reads them every step", () => {
+    const source = readFileSync(join(SRC_DIR, "ai", "agent.js"), "utf8");
+    const turnSource = source.substring(source.indexOf("async function runTurn("));
+    assert.ok(turnSource.includes("streamApiCall(client, params, flight)"), "the first call must be stoppable by a follow-up");
+    assert.ok(/if \(!stopped && followUps\.length === 0\) break;/.test(turnSource), "redo the first call while follow-ups keep arriving");
+    const loopSource = source.substring(source.indexOf("async function runToolLoop("), source.indexOf("function sendBgResult("));
+    assert.ok(loopSource.indexOf("takeFollowUps(flight)") < loopSource.indexOf("streamApiCall(client, params"), "fold follow-ups in before each step");
+    const finalPos = loopSource.indexOf("return { text: reply, error: null, sentToChannel }");
+    const lastCheck = loopSource.lastIndexOf("flight.inbox.length > 0", finalPos);
+    assert.ok(lastCheck > 0 && loopSource.lastIndexOf("closeFlight(flight)", finalPos) > lastCheck, "check for late follow-ups, then close, right before the final reply");
+    const streamSource = source.substring(source.indexOf("async function streamApiCall("), source.indexOf("function extractLastUserText("));
+    assert.ok(streamSource.indexOf("stream.aborted") < streamSource.indexOf("const transient"), "a stopped draft must not be retried as a dropped connection");
+  });
+
+  it("isFollowUp says yes only on a clear FOLLOW_UP and fails safe to separate", async () => {
+    const { isFollowUp } = await import(join(SRC_DIR, "ai", "followup.js"));
+    const answer = (text) => ({ messages: { create: async () => ({ content: [{ type: "text", text }] }) } });
+    assert.equal(await isFollowUp(answer("FOLLOW_UP"), "tell me my fishing xp", "i mean farming"), true);
+    assert.equal(await isFollowUp(answer("SEPARATE"), "tell me my fishing xp", "lol nice frog"), false);
+    assert.equal(await isFollowUp(answer("maybe"), "a", "b"), false);
+    const broken = { messages: { create: async () => { throw Object.assign(new Error("timeout"), { status: 408 }); } } };
+    assert.equal(await isFollowUp(broken, "a", "b"), false);
   });
 
   it("non-complex tool-use path also registers bg task and pushes placeholder", () => {

@@ -9,6 +9,7 @@ import { buildStableSystemPrompt, buildStablePromptVariant } from "../memory/loa
 import { rankSuspectMemories, allSensitiveMemoryNames, summarizeMemoryForPrompt, redactMemory } from "./refusal-recovery.js";
 import { fetchRecentMessages } from "../discord/history.js";
 import { getChannelDigest, updateChannelDigest } from "./digest.js";
+import { isFollowUp } from "./followup.js";
 import { hasResponded, markResponded } from "../tools/responded-cache.js";
 import { getDiscordClient } from "../discord/client.js";
 import config from "../config/index.js";
@@ -422,7 +423,9 @@ function logCacheUsage(response, label) {
   }
 }
 
-async function streamApiCall(client, params) {
+// hooks (optional, a flight): gets an abort() while the stream is open, so a
+// follow-up can stop a draft that is about to be redone anyway.
+async function streamApiCall(client, params, hooks) {
   if (params && Array.isArray(params.messages)) {
     const fixes = sanitizeMessageSequence(params.messages);
     if (fixes > 0) console.log("[ai] sanitizeMessageSequence: removed " + fixes + " orphaned/invalid block(s) before send");
@@ -432,10 +435,13 @@ async function streamApiCall(client, params) {
   // as "Something went wrong on my end" in the channel. Back off and retry.
   const delays = [4000, 12000, 30000];
   for (let attempt = 0; ; attempt++) {
+    let stream;
     try {
-      const stream = client.messages.stream(params);
+      stream = client.messages.stream(params);
+      if (hooks) hooks.abort = () => stream.abort();
       return await stream.finalMessage();
     } catch (err) {
+      if (stream && stream.aborted) throw Object.assign(new Error("draft stopped for a follow-up"), { followUp: true });
       if (err.status === 401) {
         console.log("[ai] Got 401, forcing token refresh and retrying...");
         await forceRefresh();
@@ -452,6 +458,8 @@ async function streamApiCall(client, params) {
         continue;
       }
       throw err;
+    } finally {
+      if (hooks) hooks.abort = null;
     }
   }
 }
@@ -665,8 +673,14 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
     channel.sendTyping().catch(() => {});
   }, 8000);
 
+  const flight = taskMeta && taskMeta.flight;
   try {
   while (true) {
+    const followUps = takeFollowUps(flight);
+    if (followUps.length) {
+      messages.push(...followUps);
+      console.log("[ai] Folded " + followUps.length + " follow-up(s) into background task " + taskMeta.taskKey);
+    }
     compactMessages(messages);
     applyCacheControlToLastUserMessage(messages);
 
@@ -740,6 +754,14 @@ async function runToolLoop(client, messages, tools, systemBlocks, model, channel
         messages.push({ role: "user", content: CONTINUE_NUDGE });
         continue;
       }
+      // A follow-up that came in during this last step gets answered in the same
+      // reply, not left behind. Checked and closed in one go, so none can slip in
+      // between.
+      if (flight && flight.inbox.length > 0) {
+        messages.push({ role: "assistant", content: response.content });
+        continue;
+      }
+      closeFlight(flight);
       return { text: reply, error: null, sentToChannel };
     }
 
@@ -828,45 +850,107 @@ function sendBgResult(channel, history, taskKey, result) {
   })();
 }
 
-// Replies being written right now, per channel (the user turns they answer).
-// Turns run in parallel, so many conversations in one channel each get a fast
-// answer, but a turn that starts while another is in flight would otherwise see
-// that earlier message as unanswered and answer it too (seen live: two different
-// Trawler answers to one Pixel question, 8 seconds apart). Each new turn's
-// snapshot gets a stand-in reply after every message that already has one on
-// the way.
+// Replies being worked on right now, per channel. Turns run in parallel, so many
+// conversations in one channel each get a fast answer. Two things keep that from
+// producing double answers (seen live: two different Trawler answers to one
+// Pixel question, 8 seconds apart):
+//  - a new turn's snapshot gets a stand-in reply after every message that already
+//    has one on the way, so it answers only its own message;
+//  - a follow-up from the same person ("tell me my fishing xp", then "i mean
+//    farming") is folded into the reply they already have in progress, which
+//    takes it into account and answers once.
+// A flight: { channelId, authorId, chat, request, group, anchor, inbox, open, handedOff, abort }.
 const inFlightTurns = new Map();
 const REPLY_IN_PROGRESS = "[REPLY IN PROGRESS: you are already answering the message above in a separate reply that will be posted on its own. Do not answer it again here. Respond only to the newest message.]";
 
 function snapshotWithRepliesInProgress(history, channelId) {
-  const pending = inFlightTurns.get(channelId);
-  if (!pending || pending.size === 0) return [...history];
+  const flights = inFlightTurns.get(channelId);
+  if (!flights || flights.size === 0) return [...history];
+  const anchors = new Set([...flights].map((f) => f.anchor));
   const out = [];
   for (let i = 0; i < history.length; i++) {
     out.push(history[i]);
     const next = history[i + 1];
-    if (pending.has(history[i]) && !(next && next.role === "assistant")) {
+    if (anchors.has(history[i]) && !(next && next.role === "assistant")) {
       out.push({ role: "assistant", content: REPLY_IN_PROGRESS });
     }
   }
   return out;
 }
 
-// Store a reply right after the message it answers. With turns overlapping, the
+function closeFlight(flight) {
+  if (!flight) return;
+  flight.open = false;
+  inFlightTurns.get(flight.channelId)?.delete(flight);
+}
+
+// Follow-ups that came in since the last look, marked for the model.
+function takeFollowUps(flight) {
+  if (!flight || flight.inbox.length === 0) return [];
+  const note = "[Sent while you were still working on the request above, and part of it. If it corrects or changes the request, answer only the corrected version and drop what it replaced. If it adds to it, cover both. One answer.]\n";
+  return flight.inbox.splice(0).map((t) => typeof t.content === "string"
+    ? { role: "user", content: note + t.content }
+    : { role: "user", content: [{ type: "text", text: note }, ...t.content] });
+}
+
+// The chat request this person still has in progress here, if the new message
+// belongs to it. Only asks the classifier when there is one to join.
+async function followUpTarget(channelId, authorId, content) {
+  const flights = inFlightTurns.get(channelId);
+  if (!flights) return null;
+  const mine = [...flights].filter((f) => f.open && f.chat && f.authorId === authorId);
+  const flight = mine[mine.length - 1];
+  if (!flight) return null;
+  return (await isFollowUp(await getClient(), flight.request, content)) ? flight : null;
+}
+
+// Join a follow-up to the reply in progress: into history right after the
+// request it belongs to, and into the inbox that reply reads before it is sent.
+// A draft that is still being written is stopped, since it is about to be redone.
+async function absorbFollowUp(flight, content, author, message, attachments) {
+  const userTurn = await buildUserTurn(content, author, message, attachments);
+  if (!flight.open) return false; // the reply went out while this was being checked
+  const history = getHistory(flight.channelId);
+  insertAfter(history, flight.anchor, userTurn);
+  flight.anchor = userTurn;
+  flight.group.push(userTurn);
+  flight.inbox.push(userTurn);
+  flight.request += "\n" + content;
+  markResponded(message.id);
+  trimHistory(history, flight.channelId);
+  if (flight.abort) flight.abort();
+  if (typeof message.react === "function") message.react("👀").catch(() => {});
+  return true;
+}
+
+// Store an entry right after the turn it belongs to. With turns overlapping, the
 // end of history may already hold newer messages, and a reply stored after them
 // reads as the answer to the wrong one.
-function insertReply(history, userTurn, entry) {
-  const i = history.lastIndexOf(userTurn);
+function insertAfter(history, turn, entry) {
+  const i = history.lastIndexOf(turn);
   if (i === -1) history.push(entry);
   else history.splice(i + 1, 0, entry);
 }
 
-// Take this turn's user message back out of history (failed or refused turn).
+// Take a turn's user messages back out of history (failed or refused turn).
 // By identity, not pop(), because other turns and background results can land
-// after it while the call is in flight.
-function dropTurn(history, turn) {
-  const i = history.lastIndexOf(turn);
-  if (i !== -1) history.splice(i, 1);
+// after them while the call is in flight.
+function dropTurns(history, turns) {
+  for (const t of turns) {
+    const i = history.lastIndexOf(t);
+    if (i !== -1) history.splice(i, 1);
+  }
+}
+
+async function buildUserTurn(content, author, message, attachments) {
+  const textContent = "[" + (author.displayName || author.username) + "]: " + (await replyContextFor(message)) + content;
+  // Persist images as real vision blocks (not just a text description) so later
+  // turns that refer back to an earlier image can still see it. enforceImageBudget
+  // caps how many recent images stay hydrated.
+  return {
+    role: "user",
+    content: attachments.length > 0 ? [...attachments, { type: "text", text: textContent }] : textContent,
+  };
 }
 
 // If this message is a reply, pull the replied-to message into context so the model
@@ -901,11 +985,19 @@ async function replyContextFor(message) {
 }
 
 export async function handleMessage(content, authorId, channel, author, message, attachments = []) {
-  const flight = { turn: null };
+  if (message) {
+    const target = await followUpTarget(channel.id, authorId, content);
+    if (target && await absorbFollowUp(target, content, author, message, attachments)) {
+      console.log("[ai] " + (author.displayName || author.username) + " in #" + channel.name + ": follow-up, folded into the reply in progress");
+      return null;
+    }
+  }
+  const flight = { channelId: channel.id, authorId, chat: !!message, request: content, group: [], anchor: null, inbox: [], open: true, handedOff: false, abort: null };
   try {
     return await runTurn(flight, content, authorId, channel, author, message, attachments);
   } finally {
-    if (flight.turn) inFlightTurns.get(channel.id)?.delete(flight.turn);
+    // Handed to background work, it stays open for follow-ups until that work ends.
+    if (!flight.handedOff) closeFlight(flight);
   }
 }
 
@@ -936,14 +1028,7 @@ async function runTurn(flight, content, authorId, channel, author, message, atta
     setPendingMessage(message);
   }
 
-  const textContent = "[" + (author.displayName || author.username) + "]: " + (await replyContextFor(message)) + content;
-  // Persist images as real vision blocks (not just a text description) so later
-  // turns that refer back to an earlier image can still see it. enforceImageBudget
-  // caps how many recent images stay hydrated.
-  const userContent = attachments.length > 0
-    ? [...attachments, { type: "text", text: textContent }]
-    : textContent;
-  const userTurn = { role: "user", content: userContent };
+  const userTurn = await buildUserTurn(content, author, message, attachments);
   history.push(userTurn);
   enforceImageBudget(history);
   trimHistory(history, channel.id);
@@ -952,9 +1037,10 @@ async function runTurn(flight, content, authorId, channel, author, message, atta
   // Freeze message snapshot IMMEDIATELY before any async operations. The current
   // turn's images already live in history (above), so no re-injection is needed.
   let frozenMessages = snapshotWithRepliesInProgress(history, channel.id);
+  flight.group.push(userTurn);
+  flight.anchor = userTurn;
   if (!inFlightTurns.has(channel.id)) inFlightTurns.set(channel.id, new Set());
-  inFlightTurns.get(channel.id).add(userTurn);
-  flight.turn = userTurn;
+  inFlightTurns.get(channel.id).add(flight);
 
   const bgCount = (activeBackgroundTasks.get(channel.id)?.size || 0) + getActiveAgents().size;
   console.log("[ai] " + (author.displayName || author.username) + " in #" + channel.name + ": model=" + model + ", trust=" + trust + ", tools=" + tools.length + ", images=" + attachments.length + ", bgTasks=" + bgCount);
@@ -967,15 +1053,16 @@ async function runTurn(flight, content, authorId, channel, author, message, atta
     registerBackgroundTask(channel.id, taskKey, taskSummary);
 
     const placeholderContent = "[BACKGROUND TASK " + taskKey + ": Already working on this request in a separate background process. This task is being handled independently. Do not re-address, continue, or reference this request.]";
-    insertReply(history, userTurn, { role: "assistant", content: placeholderContent });
+    insertAfter(history, flight.anchor, { role: "assistant", content: placeholderContent });
     trimHistory(history, channel.id);
 
     console.log("[ai] Started background task " + taskKey + " (complex) for channel " + channel.id);
 
+    flight.handedOff = true;
     startBgWork(async () => {
       var pMsg = await channel.send("" + emoji() + " **Working...**").catch(() => null);
       try {
-        const result = await runToolLoop(client, frozenMessages, cachedTools, systemBlocks, model, channel, { channelId: channel.id, taskKey }, pMsg);
+        const result = await runToolLoop(client, frozenMessages, cachedTools, systemBlocks, model, channel, { channelId: channel.id, taskKey, flight }, pMsg);
         unregisterBackgroundTask(channel.id, taskKey);
         if (pMsg) pMsg.delete().catch(function() {});
         await sendBgResult(channel, history, taskKey, result);
@@ -984,6 +1071,8 @@ async function runTurn(flight, content, authorId, channel, author, message, atta
         if (pMsg) pMsg.delete().catch(function() {});
         console.error("[ai] Background task error:", err);
         await channel.send("Background task crashed " + emoji() + "").catch(() => {});
+      } finally {
+        closeFlight(flight);
       }
     });
 
@@ -1009,17 +1098,32 @@ async function runTurn(flight, content, authorId, channel, author, message, atta
   compactMessages(frozenMessages);
 
   let response;
-  try {
-    response = await streamApiCall(client, params);
-  } catch (err) {
-    console.error("[ai] API error (first-call):", err.status, err.message?.substring(0, 300));
-    console.error("[ai] API error stack:", err.stack?.substring(0, 500));
-    dropTurn(history, userTurn);
-    if (err.status === 429) {
-      return "I am being rate limited right now, give me a moment " + emoji() + "";
+  for (;;) {
+    let stopped = false;
+    try {
+      response = await streamApiCall(client, params, flight);
+    } catch (err) {
+      if (!err.followUp) {
+        console.error("[ai] API error (first-call):", err.status, err.message?.substring(0, 300));
+        console.error("[ai] API error stack:", err.stack?.substring(0, 500));
+        dropTurns(history, flight.group);
+        if (err.status === 429) {
+          return "I am being rate limited right now, give me a moment " + emoji() + "";
+        }
+        return "Something went wrong on my end. Try again in a sec " + emoji() + "";
+      }
+      stopped = true;
     }
-    return "Something went wrong on my end. Try again in a sec " + emoji() + "";
+    // A follow-up landed while this answer was being written: fold it in and
+    // write the answer again, so it goes out once and covers both.
+    const followUps = takeFollowUps(flight);
+    if (!stopped && followUps.length === 0) break;
+    frozenMessages.push(...followUps);
+    applyCacheControlToLastUserMessage(frozenMessages);
+    console.log("[ai] Rewriting the reply in #" + channel.name + " to cover " + followUps.length + " follow-up(s)" + (stopped ? " (draft stopped)" : ""));
   }
+  // A plain answer is settled now. A tool run keeps taking follow-ups in its loop.
+  if (!response.content.some((b) => b.type === "tool_use")) closeFlight(flight);
 
   logCacheUsage(response, "first-call");
 
@@ -1073,10 +1177,10 @@ async function runTurn(flight, content, authorId, channel, author, message, atta
     if (response.stop_reason === "refusal" && !reply.trim()) {
       // A model-side safety stop: no content at all, not a choice to stay quiet.
       // Say so instead of posting nothing (or the canned fallback).
-      dropTurn(history, userTurn);
+      dropTurns(history, flight.group);
       const recovered = await attemptRefusalRecovery(client, params, channel);
       if (recovered && recovered.text && recovered.text.trim()) {
-        insertReply(history, userTurn, { role: "assistant", content: recovered.text });
+        insertAfter(history, flight.anchor, { role: "assistant", content: recovered.text });
         trimHistory(history, channel.id);
         return recovered.text;
       }
@@ -1089,7 +1193,7 @@ async function runTurn(flight, content, authorId, channel, author, message, atta
     // silent, nothing to add)", got copied straight into live replies and
     // posted. Keep it obviously machine-written, and isSilenceReply() swallows
     // the mimicry as a backstop.
-    insertReply(history, userTurn, { role: "assistant", content: isSilenceReply(reply) ? SILENT_TURN_MARKER : reply });
+    insertAfter(history, flight.anchor, { role: "assistant", content: isSilenceReply(reply) ? SILENT_TURN_MARKER : reply });
     trimHistory(history, channel.id);
     return reply;
   }
@@ -1100,13 +1204,14 @@ async function runTurn(flight, content, authorId, channel, author, message, atta
   registerBackgroundTask(channel.id, taskKey, taskSummary);
 
   const placeholderContent = "[BACKGROUND TASK " + taskKey + ": Already working on this request in a separate background process. This task is being handled independently. Do not re-address, continue, or reference this request.]";
-  insertReply(history, userTurn, { role: "assistant", content: placeholderContent });
+  insertAfter(history, flight.anchor, { role: "assistant", content: placeholderContent });
   trimHistory(history, channel.id);
 
   console.log("[ai] Switched to background (tool_use detected) task " + taskKey + " for channel " + channel.id);
 
   frozenMessages.push({ role: "assistant", content: response.content });
 
+  flight.handedOff = true;
   startBgWork(async () => {
     var pMsg = await channel.send("" + emoji() + " **Working...**").catch(() => null);
     const firstToolResults = [];
@@ -1123,7 +1228,7 @@ async function runTurn(flight, content, authorId, channel, author, message, atta
     frozenMessages.push({ role: "user", content: firstToolResults });
 
     try {
-      const result = await runToolLoop(client, frozenMessages, cachedTools, systemBlocks, model, channel, { channelId: channel.id, taskKey }, pMsg);
+      const result = await runToolLoop(client, frozenMessages, cachedTools, systemBlocks, model, channel, { channelId: channel.id, taskKey, flight }, pMsg);
       unregisterBackgroundTask(channel.id, taskKey);
       if (pMsg) pMsg.delete().catch(function() {});
       await sendBgResult(channel, history, taskKey, result);
@@ -1132,6 +1237,8 @@ async function runTurn(flight, content, authorId, channel, author, message, atta
       if (pMsg) pMsg.delete().catch(function() {});
       console.error("[ai] Background task error:", err);
       await channel.send("Background task crashed " + emoji() + "").catch(() => {});
+    } finally {
+      closeFlight(flight);
     }
   });
 
